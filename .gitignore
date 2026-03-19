@@ -205,3 +205,7 @@ cython_debug/
 marimo/_static/
 marimo/_lsp/
 __marimo__/
+
+# Claude Code context (personal notes, not for public repos)
+CLAUDE.md
+AGENTS.md
