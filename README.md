@@ -23,19 +23,33 @@ cp knowledge/profile.example.md knowledge/profile.md
 Edit `knowledge/profile.md` with your real information. This file is gitignored and never committed.
 
 ### 3. Add your API key
+
+Depending on the provider you want to use:
+
 ```bash
+# Browser Use (default)
 export BROWSER_USE_API_KEY=your_key_here
+
+# Anthropic
+uv pip install -e ".[anthropic]"
+export ANTHROPIC_API_KEY=your_key_here
+
+# OpenAI
+uv pip install -e ".[openai]"
+export OPENAI_API_KEY=your_key_here
 ```
-Get a key at [browser-use.com](https://browser-use.com).
 
 ## Usage
 ```bash
 autofill <url>
+autofill --provider anthropic <url>
+autofill --provider openai <url>
+autofill --provider browseruse <url>  # default
 ```
 
 Example:
 ```bash
-autofill https://jobs.example.com/apply
+autofill --provider anthropic https://jobs.example.com/apply
 ```
 
 The agent will open a browser, fill every applicable field, and prompt you to review before submitting.
