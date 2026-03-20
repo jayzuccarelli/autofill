@@ -194,11 +194,9 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
-# ChromaDB index
-knowledge/.db/
-
-# Personal data — fill this in locally, never commit
-knowledge/profile.md
+# Knowledge dir — only .gitkeep is tracked; everything else is personal data
+knowledge/*
+!knowledge/.gitkeep
 
 # PyPI configuration file
 .pypirc
