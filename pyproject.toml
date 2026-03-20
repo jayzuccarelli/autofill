@@ -23,7 +23,6 @@ classifiers = [
 ]
 dependencies = [
     "browser-use>=0.1",
-    "langchain-anthropic>=0.3",
 ]
 
 [project.optional-dependencies]
