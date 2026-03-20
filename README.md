@@ -8,15 +8,9 @@ Built on the same stack as [Browser Use](https://github.com/browser-use/browser-
 
 ## LLM Quickstart
 
-For Cursor, Claude Code, Copilot, etc.:
+For Cursor, Claude Code, Copilot, etc.: **start with [`AGENTS.md`](AGENTS.md)** (full architecture, commands, conventions). **Claude Code** also loads [`CLAUDE.md`](CLAUDE.md) — it points at `AGENTS.md` plus a short TL;DR.
 
-1. **Core code:** [`autofill/agent.py`](autofill/agent.py) — `ingest()` / `retrieve()` (Chroma), `main()` task prompt, `cli()` + `load_dotenv()`.
-2. **Deps / env:** [`pyproject.toml`](pyproject.toml), [`uv.lock`](uv.lock) — from repo root run `uv sync`.
-3. **User profile:** [`knowledge/profile.example.md`](knowledge/profile.example.md) → users copy to `knowledge/profile.md` (gitignored). Chunks are split on blank lines; retrieval is one semantic query + top‑k chunks concatenated into the task string.
-4. **Secrets:** `.env` at repo root (gitignored), e.g. `BROWSER_USE_API_KEY` — see [Browser Use Cloud](https://cloud.browser-use.com/new-api-key). Optional: `uv sync --extra anthropic|openai` + matching env vars and `--provider`.
-5. **Run:** `uv run autofill <url>` from **repository root** so `knowledge/` resolves.
-
-Upstream agent behavior, models, and cloud docs: [browser-use on GitHub](https://github.com/browser-use/browser-use).
+Upstream [browser-use](https://github.com/browser-use/browser-use) docs apply to the embedded agent/LLM layer.
 
 ---
 
