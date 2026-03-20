@@ -197,6 +197,7 @@ cython_debug/
 # Knowledge dir — only .gitkeep is tracked; everything else is personal data
 knowledge/*
 !knowledge/.gitkeep
+!knowledge/profile.example.md
 
 # PyPI configuration file
 .pypirc

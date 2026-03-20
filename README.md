@@ -1,60 +1,47 @@
 # autofill
 An AI agent that knows you and fills out any form, application, or document on your behalf.
 
+## Install
+
+**One line** (needs [git](https://git-scm.com/) and a network connection):
+
+```bash
+curl -fsSL https://raw.githubusercontent.com/jayzuccarelli/autofill/main/install.sh | bash
+```
+
+That installs [uv](https://docs.astral.sh/uv/) if needed, clones into `~/autofill`, installs dependencies from the lockfile, optionally asks for your Browser Use API key and saves it to `.env`, then tells you the next commands.
+
+Already have the repo? From the repo root:
+
+```bash
+./install.sh
+```
+
+Fork or different clone path? Set `REPO_URL` or `INSTALL_DIR` in the environment before running the `curl` command (see `install.sh`).
+
+**Why not literally like Claude Code?** Claude ships a **native installer** for a single binary. This project is **Python + a real browser**; the closest seamless option without building per-OS binaries is **one script** that owns uv + deps + clone. Same *shape* as `curl | bash`, not the same *weight* as a vendor-hosted binary.
+
 ## How it works
 1. You describe yourself in `knowledge/profile.md`
 2. At startup, your profile is indexed into a local vector database
-3. When you point it at a form, the agent retrieves the relevant parts of your profile and fills every field automatically
+3. The agent retrieves relevant chunks and fills the form
 4. The browser stays open for you to review and submit manually
 
-## Setup
+## After install
+1. Copy and edit your profile: `cp knowledge/profile.example.md knowledge/profile.md`
+2. **API key:** If you already pasted it during install, **nothing else to do** — it was saved to `.env` and autofill reads that file automatically when you run it. If you skipped that step, add the key to a `.env` file in the project folder or set `BROWSER_USE_API_KEY` in your environment ([get a key](https://cloud.browser-use.com/new-api-key)).
+3. From the repo directory: `uv run autofill <url>`
 
-### 1. Install
-```bash
-git clone <repo>
-cd autofill
-uv pip install -e .
-```
-
-### 2. Set up your profile
-```bash
-cp knowledge/profile.example.md knowledge/profile.md
-```
-Edit `knowledge/profile.md` with your real information. This file is gitignored and never committed.
-
-### 3. Add your API key
-
-Depending on the provider you want to use:
+Other providers (optional):
 
 ```bash
-# Browser Use (default)
-export BROWSER_USE_API_KEY=your_key_here
-
-# Anthropic
-uv pip install -e ".[anthropic]"
-export ANTHROPIC_API_KEY=your_key_here
-
-# OpenAI
-uv pip install -e ".[openai]"
-export OPENAI_API_KEY=your_key_here
+uv sync --extra anthropic
+export ANTHROPIC_API_KEY=…
+uv run autofill --provider anthropic <url>
 ```
-
-## Usage
-```bash
-autofill <url>
-autofill --provider anthropic <url>
-autofill --provider openai <url>
-autofill --provider browseruse <url>  # default
-```
-
-Example:
-```bash
-autofill --provider anthropic https://jobs.example.com/apply
-```
-
-The agent will open a browser, fill every applicable field, and prompt you to review before submitting.
 
 ## Notes
-- The agent will **never** click Submit — you always review and submit manually
+- Run from the **repository root** so `knowledge/` is found
+- The agent will **not** click Submit — you review and submit manually
 - File uploads requiring real documents are skipped
-- Your profile is stored locally in `knowledge/.db/` and only re-indexed when files change
+- Profile data lives under `knowledge/` locally (see `.gitignore`)
