@@ -74,10 +74,7 @@ def retrieve(query: str, n: int = 5) -> str:
     return "\n\n".join(docs)
 
 
-url = "https://a16z.fillout.com/t/2dqvGNMYi9us"
-
-
-async def main() -> None:
+async def main(url: str) -> None:
     ingest()
     profile = retrieve("contact identity address work experience")
 
@@ -107,4 +104,8 @@ Rules:
 
 
 if __name__ == "__main__":
-    asyncio.run(main())
+    import sys
+    if len(sys.argv) != 2:
+        print("Usage: python -m autofill.agent <url>")
+        sys.exit(1)
+    asyncio.run(main(sys.argv[1]))
