@@ -1,12 +1,13 @@
 """Core agent: observe form fields, retrieve context, generate fills."""
 
 import asyncio
+import browser_use as bu 
 
-from browser_use import Agent, BrowserProfile, ChatBrowserUse
 
-TASK = """
-Open https://a16z.fillout.com/t/2dqvGNMYi9us
-and fill every applicable field using this synthetic profile (map labels loosely—e.g. "Phone" = telephone):
+url = 'https://a16z.fillout.com/t/2dqvGNMYi9us'
+
+TASK = f"""
+Open {url} and fill every applicable field using this profile (map labels loosely—e.g. "Phone" = telephone):
 
 Contact & identity:
 - Full name: Morgan V. Ashford
@@ -42,6 +43,8 @@ Long text boxes (cover letter, summary, comments, "why this role"):
 
 Rules:
 - Prefer selects and radios that match the values above; otherwise choose the closest reasonable option.
+- Try to answer all the questions, if you don't know the answer, say you don't know, but if you can make a reasonable guess, do so.
+- For longer form fields, try to answer the question in a few sentences matching the profile's characteristics, using the information provided in the profile and the context provided in the task.
 - Do not upload real identity documents; skip file uploads if they require real files, or use only clearly dummy filenames if the UI forces a choice.
 - Do not click Submit, Apply, Send, or any control that would finalize or send the application.
 - When everything reasonable is filled, finish with the done action and say the user should review and submit manually.
@@ -50,9 +53,9 @@ Rules:
 
 async def main() -> None:
     # Uses BROWSER_USE_API_KEY (see https://cloud.browser-use.com/new-api-key)
-    llm = ChatBrowserUse()
-    browser_profile = BrowserProfile(keep_alive=True, headless=False)
-    agent = Agent(task=TASK, llm=llm, browser_profile=browser_profile)
+    llm = bu.ChatBrowserUse()
+    browser_profile = bu.BrowserProfile(keep_alive=True, headless=False)
+    agent = bu.Agent(task=TASK, llm=llm, browser_profile=browser_profile)
     await agent.run()
     # Keep the process (and usually the browser) alive until the user is done in the window.
     await asyncio.to_thread(
