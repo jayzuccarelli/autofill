@@ -197,6 +197,9 @@ cython_debug/
 # ChromaDB index
 knowledge/.db/
 
+# Personal data — fill this in locally, never commit
+knowledge/profile.md
+
 # PyPI configuration file
 .pypirc
 
