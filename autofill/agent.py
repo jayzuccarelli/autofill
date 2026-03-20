@@ -1,6 +1,7 @@
 """AI-powered form autofill: ingest local knowledge, retrieve context, fill form."""
 
 import asyncio
+import hashlib
 from pathlib import Path
 
 import browser_use as bu
@@ -24,15 +25,45 @@ def _read(path: Path) -> str:
     return path.read_text()
 
 
+def _hash(path: Path) -> str:
+    return hashlib.md5(path.read_bytes()).hexdigest()
+
+
 def ingest() -> None:
     col = _client().get_or_create_collection(_COLLECTION)
-    for path in sorted(_KNOWLEDGE_DIR.iterdir()):
-        if path.name.startswith(".") or not path.is_file():
+
+    # Build stored state: {filename: hash} and {filename: [ids]}
+    stored = col.get(include=["metadatas"])
+    stored_hashes: dict[str, str] = {}
+    stored_ids: dict[str, list[str]] = {}
+    for doc_id, meta in zip(stored["ids"], stored["metadatas"]):
+        fname = doc_id.split(":")[0]
+        stored_ids.setdefault(fname, []).append(doc_id)
+        if meta and "hash" in meta and fname not in stored_hashes:
+            stored_hashes[fname] = meta["hash"]
+
+    current_files = {
+        path.name: path
+        for path in sorted(_KNOWLEDGE_DIR.iterdir())
+        if not path.name.startswith(".") and path.is_file()
+    }
+
+    # Remove deleted files
+    for fname in set(stored_hashes) - set(current_files):
+        col.delete(ids=stored_ids[fname])
+
+    # Add new or re-ingest modified files
+    for fname, path in current_files.items():
+        h = _hash(path)
+        if stored_hashes.get(fname) == h:
             continue
+        if fname in stored_ids:
+            col.delete(ids=stored_ids[fname])
         chunks = [c.strip() for c in _read(path).split("\n\n") if c.strip()]
         col.upsert(
-            ids=[f"{path.name}:{i}" for i, _ in enumerate(chunks)],
+            ids=[f"{fname}:{i}" for i, _ in enumerate(chunks)],
             documents=chunks,
+            metadatas=[{"hash": h}] * len(chunks),
         )
 
 
