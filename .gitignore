@@ -211,13 +211,3 @@ __marimo__/
 
 # Claude Code context (personal notes, not for public repos)
 AGENTS.md
-
-# Personal knowledge files — never commit real personal data
-knowledge/*.pdf
-knowledge/*.docx
-knowledge/*.doc
-knowledge/*.txt
-knowledge/*.md
-knowledge/.index.pkl
-# keep the placeholder so the folder is tracked
-!knowledge/.gitkeep

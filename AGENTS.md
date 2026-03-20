@@ -1,10 +1,10 @@
-# AGENTS.md — autofill
+# agents.md — autofill
 
 Quick reference for LLMs and AI coding assistants working in this repo.
 
 ## What this project is
 
-`autofill` is a Python CLI tool that uses the `browser-use` library to drive a real browser and fill out web forms on behalf of an end user. The user runs onboarding once, drops their documents into `knowledge/`, and the agent retrieves relevant context at runtime to fill each form. The agent never clicks Submit.
+`autofill` is a Python CLI tool that uses the `browser-use` library to drive a real browser and fill out web forms on behalf of an end user. The user provides their profile, points the tool at a URL, reviews the result, and submits manually. The agent never clicks Submit.
 
 ## Repo layout
 
@@ -12,57 +12,21 @@ Quick reference for LLMs and AI coding assistants working in this repo.
 autofill/
 ├── autofill/
 │   ├── __init__.py
-│   ├── agent.py          # entry point — builds TASK from knowledge, runs browser-use
-│   ├── knowledge.py      # RAG module: ingest, embed, index, retrieve
-│   └── onboarding.py     # interactive CLI to create knowledge/profile.md
-├── knowledge/            # user's personal files — all git-ignored
-│   ├── .gitkeep
-│   ├── profile.md        # created by onboarding
-│   └── *.pdf / *.docx / *.txt / *.md   # drop in resume, cover letter, etc.
-├── evals/                # reserved for eval scripts
-├── tests/                # pytest tests
+│   └── agent.py        # entry point — profile + TASK prompt + browser-use runner
+├── knowledge/          # reserved for future profile loading
+├── evals/              # reserved for eval scripts
+├── tests/              # pytest tests
 ├── pyproject.toml
-├── CLAUDE.md             # end-user instructions
-└── AGENTS.md             # this file
+├── CLAUDE.md           # instructions for Claude Code (end-user focused)
+└── agents.md           # this file
 ```
 
 ## Core flow
 
-1. **Onboarding** (`autofill/onboarding.py`): user answers prompts → `knowledge/profile.md` written
-2. **Indexing** (`autofill/knowledge.py`): all files in `knowledge/` are parsed, chunked (~400 words, 40-word overlap), embedded with `fastembed` (BAAI/bge-small-en-v1.5), and stored in `knowledge/.index.pkl`
-3. **Agent** (`autofill/agent.py`): at startup, calls `build_index()` (no-op if index exists), then `retrieve()` with a broad profile query → injects top-10 chunks into the `TASK` prompt → passes to `bu.Agent`
-4. `browser-use` drives a real Chromium browser to observe and fill each field
-5. The browser stays alive (`keep_alive=True`) until the user presses Enter
-
-## Key modules
-
-### `autofill/knowledge.py`
-
-```python
-build_index(force=False)   # parse knowledge/ → chunk → embed → save .index.pkl
-retrieve(query, n=10)      # embed query, cosine-rank stored vectors, return top-n as string
-```
-
-Run as a script to force a rebuild:
-```bash
-uv run python -m autofill.knowledge
-```
-
-### `autofill/onboarding.py`
-
-Prompts for ~20 profile fields, writes `knowledge/profile.md`.
-
-```bash
-uv run python -m autofill.onboarding
-```
-
-### `autofill/agent.py`
-
-```python
-build_task(url)   # calls build_index() + retrieve(), returns formatted TASK string
-```
-
-The `url` variable at the top is the only thing users normally change.
+1. `agent.py` defines a `TASK` string — a plain-English prompt describing the user's profile and fill rules
+2. That prompt is passed to `bu.Agent(task=TASK, llm=bu.ChatBrowserUse(), ...)`
+3. `browser-use` drives a real Chromium browser to observe and fill each field
+4. The browser stays alive (`keep_alive=True`) until the user presses Enter
 
 ## Key types and imports
 
@@ -75,13 +39,15 @@ agent = bu.Agent(task=TASK, llm=llm, browser_profile=profile)
 await agent.run()
 ```
 
-## Supported document formats
+## How to add or change profile fields
 
-| Extension | Parser |
-|-----------|--------|
-| `.pdf`    | `pypdf.PdfReader` |
-| `.docx`   | `python-docx` |
-| `.md` `.txt` `.csv` etc. | plain `read_text()` |
+Edit the `TASK` f-string in `autofill/agent.py`. The agent maps form labels loosely, so adding a line like:
+
+```
+- GitHub URL: https://github.com/yourhandle
+```
+
+is enough — no code changes required beyond the string.
 
 ## Constraints the agent enforces (via TASK prompt)
 
@@ -99,12 +65,10 @@ await agent.run()
 
 ```bash
 uv sync
-uv run python -m autofill.onboarding       # first time
-uv run python -m autofill.knowledge        # build/rebuild index
-uv run python autofill/agent.py            # fill a form
+BROWSER_USE_API_KEY=your_key uv run python autofill/agent.py
 ```
 
-## Testing and linting
+## Testing and linting (for contributors)
 
 ```bash
 uv sync --extra dev
@@ -113,4 +77,4 @@ uv run ruff check . --fix && uv run ruff format .
 uv run mypy autofill/
 ```
 
-Never commit real personal data. Use the synthetic Morgan Ashford profile for tests/evals only.
+Use the synthetic Morgan Ashford profile already in `agent.py` for any tests or evals. Never commit real personal data.
