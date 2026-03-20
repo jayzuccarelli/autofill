@@ -1,63 +1,74 @@
-"""Core agent: observe form fields, retrieve context, generate fills."""
+"""AI-powered form autofill: ingest local knowledge, retrieve context, fill form."""
 
 import asyncio
-import browser_use as bu 
+from pathlib import Path
+
+import browser_use as bu
+import chromadb
+
+_KNOWLEDGE_DIR = Path("knowledge")
+_DB_PATH = _KNOWLEDGE_DIR / ".db"
+_COLLECTION = "profile"
 
 
-url = 'https://a16z.fillout.com/t/2dqvGNMYi9us'
+def _client() -> chromadb.ClientAPI:
+    _DB_PATH.mkdir(parents=True, exist_ok=True)
+    return chromadb.PersistentClient(path=str(_DB_PATH))
 
-TASK = f"""
-Open {url} and fill every applicable field using this profile (map labels loosely—e.g. "Phone" = telephone):
 
-Contact & identity:
-- Full name: Morgan V. Ashford
-- First name: Morgan
-- Last name: Ashford
-- Email: morgan.ashford.test@example.com
-- Telephone: +1 555-284-0193
+def _read(path: Path) -> str:
+    if path.suffix == ".pdf":
+        import pdfplumber
+        with pdfplumber.open(path) as pdf:
+            return "\n".join(page.extract_text() or "" for page in pdf.pages)
+    return path.read_text()
 
-Address:
-- Street address / Address line 1: 742 Evergreen Terrace
-- Address line 2: Unit 12B
-- City: Springfield
-- State / Province: IL
-- Postal / ZIP code: 62704
-- Country: United States
 
-Work:
-- Current or most recent job title: Senior Product Analyst
-- Current or most recent company: Northbridge Analytics Co.
-- Years of experience (if asked as a number): 7
-- LinkedIn URL: https://www.linkedin.com/in/morgan-ashford-demo
-- Personal website or portfolio: https://portfolio-example.test/morgan-ash
+def ingest() -> None:
+    col = _client().get_or_create_collection(_COLLECTION)
+    for path in sorted(_KNOWLEDGE_DIR.iterdir()):
+        if path.name.startswith(".") or not path.is_file():
+            continue
+        chunks = [c.strip() for c in _read(path).split("\n\n") if c.strip()]
+        col.upsert(
+            ids=[f"{path.name}:{i}" for i, _ in enumerate(chunks)],
+            documents=chunks,
+        )
 
-Application-specific (use if fields exist):
-- Desired salary / compensation expectation: 145000 USD (or flexible / negotiable if only free text)
-- Earliest start date: 2026-04-15
-- Work authorization: Yes, authorized to work in the United States
-- Relocation: Open to relocation
-- How did you hear about us?: Company careers page
 
-Long text boxes (cover letter, summary, comments, "why this role"):
-- I am a product analyst with 7+ years turning ambiguous problems into measurable outcomes. I enjoy collaborating across eng, design, and go-to-market, and I am excited to learn how this team ships and iterates. This submission uses placeholder data for testing the application flow.
+def retrieve(query: str, n: int = 5) -> str:
+    col = _client().get_or_create_collection(_COLLECTION)
+    results = col.query(query_texts=[query], n_results=n)
+    docs: list[str] = results["documents"][0]  # type: ignore[index]
+    return "\n\n".join(docs)
 
-Rules:
-- Prefer selects and radios that match the values above; otherwise choose the closest reasonable option.
-- Try to answer all the questions, if you don't know the answer, say you don't know, but if you can make a reasonable guess, do so.
-- For longer form fields, try to answer the question in a few sentences matching the profile's characteristics, using the information provided in the profile and the context provided in the task.
-- Do not upload real identity documents; skip file uploads if they require real files, or use only clearly dummy filenames if the UI forces a choice.
-- Do not click Submit, Apply, Send, or any control that would finalize or send the application.
-- When everything reasonable is filled, finish with the done action and say the user should review and submit manually.
-"""
+
+url = "https://a16z.fillout.com/t/2dqvGNMYi9us"
 
 
 async def main() -> None:
-    # Uses BROWSER_USE_API_KEY (see https://cloud.browser-use.com/new-api-key)
+    ingest()
+    profile = retrieve("contact identity address work experience")
+
+    task = f"""
+Open {url} and fill every applicable field using the profile below (map labels
+loosely — e.g. "Phone" = telephone):
+
+{profile}
+
+Rules:
+- Prefer selects and radios that match the values above; otherwise choose the closest reasonable option.
+- Try to answer all the questions; if unsure, make a reasonable guess.
+- For longer fields, write a few sentences consistent with the profile.
+- Do not upload real identity documents; skip file uploads requiring real files.
+- Do not click Submit, Apply, Send, or any control that finalises the application.
+- When everything reasonable is filled, finish with the done action and tell the user to review and submit manually.
+"""
+
     llm = bu.ChatBrowserUse()
     browser_profile = bu.BrowserProfile(keep_alive=True, headless=False)
-    agent = bu.Agent(task=TASK, llm=llm, browser_profile=browser_profile)
+    agent = bu.Agent(task=task, llm=llm, browser_profile=browser_profile)
     await agent.run()
-    # Keep the process (and usually the browser) alive until the user is done in the window.
     await asyncio.to_thread(
         input,
         "Browser left open — review and submit in the window. Press Enter here to exit when finished. ",
