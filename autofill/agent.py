@@ -60,6 +60,8 @@ def ingest() -> None:
         if fname in stored_ids:
             col.delete(ids=stored_ids[fname])
         chunks = [c.strip() for c in _read(path).split("\n\n") if c.strip()]
+        if not chunks:
+            continue
         col.upsert(
             ids=[f"{fname}:{i}" for i, _ in enumerate(chunks)],
             documents=chunks,
