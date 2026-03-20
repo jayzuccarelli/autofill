@@ -6,6 +6,7 @@ from pathlib import Path
 
 import browser_use as bu
 import chromadb
+from dotenv import load_dotenv
 
 _KNOWLEDGE_DIR = Path("knowledge")
 _DB_PATH = _KNOWLEDGE_DIR / ".db"
@@ -123,6 +124,7 @@ Rules:
 
 
 def cli() -> None:
+    load_dotenv()  # load .env from cwd so API keys work without `source .env`
     import argparse
     parser = argparse.ArgumentParser(description="AI-powered form autofill")
     parser.add_argument("url", help="URL of the form to fill")
