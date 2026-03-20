@@ -194,6 +194,10 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+# Knowledge dir — only .gitkeep is tracked; everything else is personal data
+knowledge/*
+!knowledge/.gitkeep
+
 # PyPI configuration file
 .pypirc
 
