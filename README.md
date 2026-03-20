@@ -6,6 +6,12 @@ Point it at a URL. It fills every field. You review and submit.
 
 ---
 
+## Quick start for LLMs
+
+See [AGENTS.md](AGENTS.md).
+
+---
+
 ## Quick start for humans
 
 **1. Get an API key**
@@ -37,12 +43,6 @@ BROWSER_USE_API_KEY=your_key uv run python autofill/agent.py
 ```
 
 A browser opens, fills the form, and waits. Review everything, then submit yourself.
-
----
-
-## Quick start for LLMs
-
-See [AGENTS.md](AGENTS.md).
 
 ---
 
