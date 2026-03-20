@@ -23,6 +23,10 @@ classifiers = [
 ]
 dependencies = [
     "browser-use>=0.1",
+    "fastembed>=0.3",
+    "numpy>=1.26",
+    "pypdf>=4.0",
+    "python-docx>=1.1",
 ]
 
 [project.optional-dependencies]
