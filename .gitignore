@@ -194,6 +194,9 @@ cython_debug/
 # Ruff stuff:
 .ruff_cache/
 
+# ChromaDB index
+knowledge/.db/
+
 # PyPI configuration file
 .pypirc
 
