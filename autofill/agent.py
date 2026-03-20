@@ -103,9 +103,13 @@ Rules:
     )
 
 
-if __name__ == "__main__":
+def cli() -> None:
     import sys
     if len(sys.argv) != 2:
-        print("Usage: python -m autofill.agent <url>")
+        print("Usage: autofill <url>")
         sys.exit(1)
     asyncio.run(main(sys.argv[1]))
+
+
+if __name__ == "__main__":
+    cli()
