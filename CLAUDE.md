@@ -1,6 +1,8 @@
 # CLAUDE.md — autofill
 
 AI agent that fills out any form, application, or document on behalf of a user.
+Users clone this repo, drop their own profile into `agent.py` (or eventually
+`knowledge/`), and run it locally against any form URL.
 
 ## Architecture
 
@@ -8,36 +10,29 @@ AI agent that fills out any form, application, or document on behalf of a user.
 autofill/
 ├── autofill/
 │   ├── __init__.py       # package exports
-│   └── agent.py          # core agent: TASK prompt + browser-use runner
-├── knowledge/            # user profile data (future: structured profiles)
-├── evals/                # evaluation scripts and result snapshots
-├── tests/                # pytest test suite
-├── pyproject.toml        # project config, deps, tool settings
+│   └── agent.py          # TASK prompt + browser-use runner
+├── knowledge/            # user profile data (future: load at runtime)
+├── evals/                # eval scripts run against live URLs
+├── tests/                # pytest unit/integration tests
+├── pyproject.toml        # deps, ruff, mypy config
 └── CLAUDE.md             # this file
 ```
 
-**Core flow**: `agent.py` builds a natural-language TASK prompt from a user profile, hands it to a `browser-use` Agent with a `ChatBrowserUse` LLM, and the agent drives a real browser to detect and fill form fields. The browser is left open for the user to review before submitting.
+**Core flow**: `agent.py` builds a TASK prompt from a profile, passes it to a
+`browser-use` Agent with `ChatBrowserUse`, which drives a real browser to fill
+every form field. The browser stays open so the user can review before submitting.
 
-**Key dependency**: [`browser-use`](https://github.com/browser-use/browser-use) — provides `Agent`, `BrowserProfile`, and `ChatBrowserUse`. Requires `BROWSER_USE_API_KEY`.
+**Key dependency**: [`browser-use`](https://github.com/browser-use/browser-use) —
+`Agent`, `BrowserProfile`, `ChatBrowserUse`. Requires `BROWSER_USE_API_KEY`.
 
 ## Development Commands
 
 ```bash
-# install (use uv)
-uv sync --extra dev
-
-# run the agent
-uv run python autofill/agent.py
-
-# tests
-uv run pytest
-
-# lint + format
-uv run ruff check . --fix
-uv run ruff format .
-
-# type check
-uv run mypy autofill/
+uv sync --extra dev                                    # install
+uv run python autofill/agent.py                        # run the agent
+uv run pytest                                          # tests
+uv run ruff check . --fix && uv run ruff format .      # lint + format
+uv run mypy autofill/                                  # type check
 ```
 
 ## Code Style
@@ -45,20 +40,23 @@ uv run mypy autofill/
 - Python 3.11+, modern typing: `str | None` not `Optional[str]`
 - `async`/`await` throughout — browser-use is fully async
 - Line length: 88 (ruff default)
-- No magic strings: keep URLs, profile fields, and task text as named constants or structured data
-- Tests go in `tests/`; evals (live browser runs) go in `evals/`
+- No magic strings: URLs, field names, and task text as named constants
 
 ## Extending the Agent
 
-**To add a new profile field**: update the TASK string in `agent.py` with the new label and value. The agent maps form labels loosely — keep the instruction format consistent with existing entries.
+**New profile field**: add the label + value to the TASK string in `agent.py`,
+following the existing format. The agent maps form labels loosely.
 
-**To support multiple profiles**: move the hardcoded profile dict into `knowledge/`, load it at runtime, and template it into the TASK string.
+**Multiple profiles**: move the profile dict into `knowledge/`, load it at
+runtime, and template into TASK.
 
-**To add evals**: add a script in `evals/` that runs the agent against a target URL and asserts expected field values were filled. Do not commit real personal data to `knowledge/` or `evals/`.
+**New evals**: add a script in `evals/` that runs the agent against a target URL.
+Use the synthetic Morgan Ashford profile in evals and tests — never commit a real
+person's data to the repo.
 
-## Constraints
+## Dev / Test Conventions
 
-- Never click Submit / Apply / Send — the agent must stop short and prompt the user to review
-- Never upload real identity documents — skip or use clearly dummy filenames
-- Do not commit real personal data; use synthetic profiles (like the Morgan Ashford placeholder)
-- Always run lint and type check before committing
+- Tests and evals use the synthetic Morgan Ashford profile already in `agent.py`
+- Keep real personal data out of committed files — users supply their own profile
+  locally and it never gets pushed to this repo
+- Always lint and type-check before committing
