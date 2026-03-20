@@ -91,6 +91,11 @@ def _llm(provider: str) -> object:
 async def main(url: str, provider: str) -> None:
     ingest()
     profile = retrieve("contact identity address work experience")
+    if not profile.strip():
+        raise SystemExit(
+            "No profile in the knowledge store. Add one or more files under knowledge/ "
+            "(e.g. knowledge/profile.md — see README), run from the project root, then try again."
+        )
 
     task = f"""
 Open {url} and fill every applicable field using the profile below (map labels
