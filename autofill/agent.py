@@ -74,7 +74,19 @@ def retrieve(query: str, n: int = 5) -> str:
     return "\n\n".join(docs)
 
 
-async def main(url: str) -> None:
+def _llm(provider: str) -> object:
+    if provider == "anthropic":
+        from langchain_anthropic import ChatAnthropic
+        return ChatAnthropic(model="claude-opus-4-6")  # type: ignore[return-value]
+    if provider == "openai":
+        from langchain_openai import ChatOpenAI
+        return ChatOpenAI(model="gpt-4o")  # type: ignore[return-value]
+    if provider == "browseruse":
+        return bu.ChatBrowserUse()
+    raise ValueError(f"Unknown provider '{provider}'. Choose: anthropic, openai, browseruse")
+
+
+async def main(url: str, provider: str) -> None:
     ingest()
     profile = retrieve("contact identity address work experience")
 
@@ -93,7 +105,7 @@ Rules:
 - When everything reasonable is filled, finish with the done action and tell the user to review and submit manually.
 """
 
-    llm = bu.ChatBrowserUse()
+    llm = _llm(provider)
     browser_profile = bu.BrowserProfile(keep_alive=True, headless=False)
     agent = bu.Agent(task=task, llm=llm, browser_profile=browser_profile)
     await agent.run()
@@ -104,11 +116,17 @@ Rules:
 
 
 def cli() -> None:
-    import sys
-    if len(sys.argv) != 2:
-        print("Usage: autofill <url>")
-        sys.exit(1)
-    asyncio.run(main(sys.argv[1]))
+    import argparse
+    parser = argparse.ArgumentParser(description="AI-powered form autofill")
+    parser.add_argument("url", help="URL of the form to fill")
+    parser.add_argument(
+        "--provider",
+        choices=["anthropic", "openai", "browseruse"],
+        default="browseruse",
+        help="LLM provider to use (default: browseruse)",
+    )
+    args = parser.parse_args()
+    asyncio.run(main(args.url, args.provider))
 
 
 if __name__ == "__main__":
