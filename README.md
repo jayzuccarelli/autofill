@@ -1,38 +1,57 @@
 # autofill
-An AI agent that knows you and fills out any form, application, or document on your behalf.
 
-## Install
+AI-powered form autofill: local profile + RAG + [browser-use](https://github.com/browser-use/browser-use) to fill web forms; you review and submit manually.
 
-**One line** (needs [git](https://git-scm.com/) and a network connection):
+Built on the same stack as [Browser Use](https://github.com/browser-use/browser-use) (Python ≥3.11, `Agent` + `ChatBrowserUse` by default).
+
+---
+
+## LLM Quickstart
+
+For Cursor, Claude Code, Copilot, etc.:
+
+1. **Core code:** [`autofill/agent.py`](autofill/agent.py) — `ingest()` / `retrieve()` (Chroma), `main()` task prompt, `cli()` + `load_dotenv()`.
+2. **Deps / env:** [`pyproject.toml`](pyproject.toml), [`uv.lock`](uv.lock) — from repo root run `uv sync`.
+3. **User profile:** [`knowledge/profile.example.md`](knowledge/profile.example.md) → users copy to `knowledge/profile.md` (gitignored). Chunks are split on blank lines; retrieval is one semantic query + top‑k chunks concatenated into the task string.
+4. **Secrets:** `.env` at repo root (gitignored), e.g. `BROWSER_USE_API_KEY` — see [Browser Use Cloud](https://cloud.browser-use.com/new-api-key). Optional: `uv sync --extra anthropic|openai` + matching env vars and `--provider`.
+5. **Run:** `uv run autofill <url>` from **repository root** so `knowledge/` resolves.
+
+Upstream agent behavior, models, and cloud docs: [browser-use on GitHub](https://github.com/browser-use/browser-use).
+
+---
+
+## Human Quickstart
+
+**1. Install** (needs [git](https://git-scm.com/)):
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jayzuccarelli/autofill/main/install.sh | bash
 ```
 
-That installs [uv](https://docs.astral.sh/uv/) if needed, clones into `~/autofill`, installs dependencies from the lockfile, optionally asks for your Browser Use API key and saves it to `.env`, then tells you the next commands.
+That installs [uv](https://docs.astral.sh/uv/) if needed, clones to `~/autofill`, runs `uv sync`, and can prompt for your Browser Use API key (saved to `.env`). Already cloned? From repo root: `./install.sh`.
 
-Already have the repo? From the repo root:
+Fork / custom clone location: set `REPO_URL` or `INSTALL_DIR` before the `curl` command (see [`install.sh`](install.sh)).
+
+**2. Profile**
 
 ```bash
-./install.sh
+cp knowledge/profile.example.md knowledge/profile.md
 ```
 
-Fork or different clone path? Set `REPO_URL` or `INSTALL_DIR` in the environment before running the `curl` command (see `install.sh`).
+Edit `knowledge/profile.md` with real info (gitignored).
 
-**Why not literally like Claude Code?** Claude ships a **native installer** for a single binary. This project is **Python + a real browser**; the closest seamless option without building per-OS binaries is **one script** that owns uv + deps + clone. Same *shape* as `curl | bash`, not the same *weight* as a vendor-hosted binary.
+**3. API key**
 
-## How it works
-1. You describe yourself in `knowledge/profile.md`
-2. At startup, your profile is indexed into a local vector database
-3. The agent retrieves relevant chunks and fills the form
-4. The browser stays open for you to review and submit manually
+If you pasted during install, you’re done — autofill loads `.env` on startup. Otherwise put `BROWSER_USE_API_KEY` in `.env` or your environment ([get a key](https://cloud.browser-use.com/new-api-key)).
 
-## After install
-1. Copy and edit your profile: `cp knowledge/profile.example.md knowledge/profile.md`
-2. **API key:** If you already pasted it during install, **nothing else to do** — it was saved to `.env` and autofill reads that file automatically when you run it. If you skipped that step, add the key to a `.env` file in the project folder or set `BROWSER_USE_API_KEY` in your environment ([get a key](https://cloud.browser-use.com/new-api-key)).
-3. From the repo directory: `uv run autofill <url>`
+**4. Run**
 
-Other providers (optional):
+```bash
+cd ~/autofill   # or your clone path
+uv run autofill <url>
+```
+
+Optional other providers:
 
 ```bash
 uv sync --extra anthropic
@@ -40,8 +59,19 @@ export ANTHROPIC_API_KEY=…
 uv run autofill --provider anthropic <url>
 ```
 
+---
+
+## How it works
+
+1. You describe yourself in `knowledge/profile.md`
+2. On startup, files under `knowledge/` are indexed into a local vector DB (`knowledge/.db/`)
+3. The agent gets retrieved chunks in its task, opens the form, and fills fields
+4. Submit is never clicked automatically — you review in the browser
+
+---
+
 ## Notes
-- Run from the **repository root** so `knowledge/` is found
-- The agent will **not** click Submit — you review and submit manually
-- File uploads requiring real documents are skipped
-- Profile data lives under `knowledge/` locally (see `.gitignore`)
+
+- Run commands from the **repository root** so `knowledge/` is found
+- File uploads that need real documents are skipped
+- Personal data stays under `knowledge/` and `.env` (see [`.gitignore`](.gitignore))
