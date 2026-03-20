@@ -42,7 +42,7 @@ A browser opens, fills the form, and waits. Review everything, then submit yours
 
 ## Quick start for LLMs
 
-See [agents.md](agents.md).
+See [AGENTS.md](AGENTS.md).
 
 ---
 
