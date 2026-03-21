@@ -20,9 +20,6 @@ install_uv() {
 
 add_to_path() {
   local bin_dir="$1/bin"
-  if echo "$PATH" | tr ':' '\n' | grep -qx "$bin_dir" 2>/dev/null; then
-    return 0
-  fi
   local shell_rc=""
   if [[ -f "${HOME}/.zshrc" ]]; then
     shell_rc="${HOME}/.zshrc"
@@ -32,8 +29,9 @@ add_to_path() {
   if [[ -n "$shell_rc" ]]; then
     if ! grep -q "autofill/bin" "$shell_rc" 2>/dev/null; then
       printf '\n# autofill\nexport PATH="%s:$PATH"\n' "$bin_dir" >> "$shell_rc"
-      echo "Added ${bin_dir} to PATH in ${shell_rc}."
     fi
+    # Reload so `autofill` works in this same shell — no "open a new terminal".
+    source "$shell_rc"
   fi
   export PATH="${bin_dir}:${PATH}"
 }
@@ -52,7 +50,7 @@ if [[ -n "$_script" && "$_script" != "-" ]]; then
     uv sync
     add_to_path "$SCRIPT_DIR"
     echo ""
-    echo "Installed. Run: autofill"
+    printf '✓ autofill installed. Run \033[1;32mautofill\033[0m to get started.\n'
     exit 0
   fi
 fi
@@ -84,4 +82,4 @@ fi
 add_to_path "$INSTALL_DIR"
 
 echo ""
-echo "Installed. Open a new terminal (or run: source ~/.zshrc), then run: autofill"
+printf '✓ autofill installed. Run \033[1;32mautofill\033[0m to get started.\n'
