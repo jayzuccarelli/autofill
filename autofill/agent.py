@@ -8,6 +8,7 @@ from pathlib import Path
 import browser_use as bu
 import chromadb
 from dotenv import load_dotenv
+from tqdm import tqdm
 
 _KNOWLEDGE_DIR = Path("knowledge")
 _DB_PATH = _KNOWLEDGE_DIR / ".db"
@@ -37,6 +38,7 @@ def _hash(path: Path) -> str:
 
 _CHUNK_SIZE = 1000
 _CHUNK_OVERLAP = 200
+_UPSERT_BATCH = 50
 
 
 def _chunk_text(text: str) -> list[str]:
@@ -86,20 +88,25 @@ def ingest() -> None:
         col.delete(ids=stored_ids[fname])
 
     # Add new or re-ingest modified files
-    for fname, path in current_files.items():
-        h = _hash(path)
-        if stored_hashes.get(fname) == h:
-            continue
+    hashes = {f: _hash(p) for f, p in current_files.items()}
+    to_ingest = {f: p for f, p in current_files.items() if stored_hashes.get(f) != hashes[f]}
+    if not to_ingest:
+        return
+
+    for fname, path in tqdm(to_ingest.items(), desc="Indexing", unit="file"):
+        h = hashes[fname]
         if fname in stored_ids:
             col.delete(ids=stored_ids[fname])
         chunks = _chunk_text(_read(path))
         if not chunks:
             continue
-        col.upsert(
-            ids=[f"{fname}:{i}" for i, _ in enumerate(chunks)],
-            documents=chunks,
-            metadatas=[{"hash": h}] * len(chunks),
-        )
+        for i in range(0, len(chunks), _UPSERT_BATCH):
+            batch = chunks[i : i + _UPSERT_BATCH]
+            col.upsert(
+                ids=[f"{fname}:{i + j}" for j in range(len(batch))],
+                documents=batch,
+                metadatas=[{"hash": h}] * len(batch),
+            )
 
 
 def retrieve(query: str, n: int = 10) -> str:
