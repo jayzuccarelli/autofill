@@ -51,7 +51,9 @@ def ingest() -> None:
     current_files = {
         path.name: path
         for path in sorted(_KNOWLEDGE_DIR.iterdir())
-        if not path.name.startswith(".") and path.is_file()
+        if not path.name.startswith(".")
+        and path.is_file()
+        and path.name != "profile.example.md"
     }
 
     # Remove deleted files
@@ -166,18 +168,16 @@ def _onboard_profile() -> None:
     summary = _ask("One-line about yourself (work, education, interests): ")
 
     lines = [f"# {name}\n"]
-    lines.append("## Contact\n")
+    lines.append(f"- **Full name:** {name}")
     if email:
         lines.append(f"- **Email:** {email}")
     if phone:
         lines.append(f"- **Phone:** {phone}")
     if location:
         lines.append(f"- **Location:** {location}")
-    lines.append("")
     if summary:
-        lines.append("## Summary\n")
-        lines.append(summary)
-        lines.append("")
+        lines.append(f"- **About:** {summary}")
+    lines.append("")
 
     _KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
     _PROFILE.write_text("\n".join(lines))
