@@ -22,8 +22,6 @@ Open a terminal and run:
 curl -fsSL https://raw.githubusercontent.com/jayzuccarelli/autofill/main/install.sh | bash
 ```
 
-Then **open a new terminal** before running `autofill`.
-
 ### Setup
 
 ```bash

@@ -25,12 +25,12 @@ _PROVIDERS: dict[str, dict[str, str]] = {
     },
     "openai": {
         "env": "OPENAI_API_KEY",
-        "label": "OpenAI (requires: uv sync --extra openai)",
+        "label": "OpenAI",
         "url": "https://platform.openai.com/api-keys",
     },
     "anthropic": {
         "env": "ANTHROPIC_API_KEY",
-        "label": "Anthropic (requires: uv sync --extra anthropic)",
+        "label": "Anthropic",
         "url": "https://console.anthropic.com/settings/keys",
     },
 }
@@ -164,11 +164,11 @@ def retrieve(query: str, n: int = 10) -> str:
 
 def _llm(provider: str) -> object:
     if provider == "anthropic":
-        from langchain_anthropic import ChatAnthropic
-        return ChatAnthropic(model="claude-opus-4-6")  # type: ignore[return-value]
+        from browser_use.llm.anthropic.chat import ChatAnthropic
+        return ChatAnthropic(model="claude-sonnet-4-20250514")
     if provider == "openai":
-        from langchain_openai import ChatOpenAI
-        return ChatOpenAI(model="gpt-4o")  # type: ignore[return-value]
+        from browser_use.llm.openai.chat import ChatOpenAI
+        return ChatOpenAI(model="gpt-4o")
     if provider == "browseruse":
         return bu.ChatBrowserUse()
     raise ValueError(f"Unknown provider '{provider}'. Choose: anthropic, openai, browseruse")
@@ -306,9 +306,6 @@ def _onboard_api_key() -> None:
         os.environ[info["env"]] = key
         os.environ["AUTOFILL_PROVIDER"] = provider
         print("Saved to .env.\n")
-
-        if provider != "browseruse":
-            print(f"Tip: run `uv sync --extra {provider}` to install the provider deps.\n")
     else:
         print("Skipped. Set an API key before running autofill.\n")
 
