@@ -15,7 +15,7 @@ For Cursor, Claude Code, Copilot, etc.: **start with [`AGENTS.md`](AGENTS.md)**.
 ## Install
 
 ```bash
-curl -fsSL https://cdn.jsdelivr.net/gh/jayzuccarelli/autofill@main/install.sh | bash
+curl -fsSL https://raw.githubusercontent.com/jayzuccarelli/autofill/main/install.sh | bash
 ```
 
 Then open a new terminal (or `source ~/.zshrc`).

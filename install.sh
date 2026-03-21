@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 # Install autofill: uv (if needed) + clone + uv sync + add to PATH.
-# Remote: curl -fsSL https://cdn.jsdelivr.net/gh/jayzuccarelli/autofill@main/install.sh | bash
+# Remote: curl -fsSL https://raw.githubusercontent.com/jayzuccarelli/autofill/main/install.sh | bash
 # Local:  ./install.sh
 set -euo pipefail
 
