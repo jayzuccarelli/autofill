@@ -13,15 +13,15 @@ Instructions for coding agents (Cursor, Copilot, Devin, etc.) working on **autof
 
 - **Package manager:** [uv](https://docs.astral.sh/uv/). Install deps: `uv sync` (lockfile: [`uv.lock`](uv.lock)).
 - **Optional extras:** `uv sync --extra anthropic` / `--extra openai` for non-default LLM providers.
-- **Secrets:** `.env` in repo root (gitignored). `load_dotenv()` runs at start of `cli()`. Default provider needs `BROWSER_USE_API_KEY` ([API keys](https://cloud.browser-use.com/settings?tab=api-keys&new=1)).
+- **Secrets:** `.env` in repo root (gitignored). `load_dotenv()` runs at start of `cli()`. Needs one of: `BROWSER_USE_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`. Onboarding prompts the user to pick a provider. `AUTOFILL_PROVIDER` (also in `.env`) records the choice; `--provider` flag or auto-detection from available keys also works.
 - **One-shot install for humans:** [`install.sh`](install.sh) + see [README.md](README.md).
 
 ## Run
 
 ```bash
-autofill                    # first time: runs onboarding (profile, key, files, DB)
-autofill <form-url>         # fill a form
-autofill --provider anthropic <url>   # after uv sync --extra anthropic + ANTHROPIC_API_KEY
+autofill                              # first time: runs onboarding (profile, provider, key, files, DB)
+autofill <form-url>                   # fill a form (provider auto-detected from API key)
+autofill --provider anthropic <url>   # override: after uv sync --extra anthropic + ANTHROPIC_API_KEY
 ```
 
 Dev shortcut: `uv run autofill …` also works.

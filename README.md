@@ -32,7 +32,7 @@ autofill
 
 The first time you run it, autofill walks you through:
 1. **Profile** — asks your name, date of birth, email, phone, location, socials, and a short summary; saves to `knowledge/profile.md`.
-2. **API key** — shows where to get a Browser Use key and lets you paste it; saves to `.env`.
+2. **API key** — lets you pick a provider (Browser Use, OpenAI, or Anthropic), then paste your key; saves to `.env`.
 3. **Extra files** — optionally add resumes, cover letters, etc. to `knowledge/`.
 4. **Builds the database** — indexes everything under `knowledge/` so it's ready.
 
