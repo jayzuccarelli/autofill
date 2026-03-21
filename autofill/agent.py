@@ -24,12 +24,24 @@ def _client() -> chromadb.ClientAPI:
     return chromadb.PersistentClient(path=str(_DB_PATH))
 
 
+_MAX_TEXT_CHARS = 500_000
+
+
 def _read(path: Path) -> str:
     if path.suffix == ".pdf":
         import pdfplumber
+        parts: list[str] = []
+        total = 0
         with pdfplumber.open(path) as pdf:
-            return "\n".join(page.extract_text() or "" for page in pdf.pages)
-    return path.read_text()
+            for page in pdf.pages:
+                text = page.extract_text() or ""
+                parts.append(text)
+                total += len(text)
+                if total >= _MAX_TEXT_CHARS:
+                    break
+        return "\n".join(parts)
+    text = path.read_text()
+    return text[:_MAX_TEXT_CHARS]
 
 
 def _hash(path: Path) -> str:
@@ -93,20 +105,25 @@ def ingest() -> None:
     if not to_ingest:
         return
 
-    for fname, path in tqdm(to_ingest.items(), desc="Indexing", unit="file"):
-        h = hashes[fname]
+    all_work: list[tuple[str, str, list[str]]] = []
+    for fname, path in to_ingest.items():
         if fname in stored_ids:
             col.delete(ids=stored_ids[fname])
         chunks = _chunk_text(_read(path))
-        if not chunks:
-            continue
-        for i in range(0, len(chunks), _UPSERT_BATCH):
-            batch = chunks[i : i + _UPSERT_BATCH]
-            col.upsert(
-                ids=[f"{fname}:{i + j}" for j in range(len(batch))],
-                documents=batch,
-                metadatas=[{"hash": h}] * len(batch),
-            )
+        if chunks:
+            all_work.append((fname, hashes[fname], chunks))
+
+    total_chunks = sum(len(c) for _, _, c in all_work)
+    with tqdm(total=total_chunks, desc="Indexing", unit="chunk") as bar:
+        for fname, h, chunks in all_work:
+            for i in range(0, len(chunks), _UPSERT_BATCH):
+                batch = chunks[i : i + _UPSERT_BATCH]
+                col.upsert(
+                    ids=[f"{fname}:{i + j}" for j in range(len(batch))],
+                    documents=batch,
+                    metadatas=[{"hash": h}] * len(batch),
+                )
+                bar.update(len(batch))
 
 
 def retrieve(query: str, n: int = 10) -> str:
