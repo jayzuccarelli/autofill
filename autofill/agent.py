@@ -16,7 +16,39 @@ _COLLECTION = "profile"
 _PROFILE_EXAMPLE = _KNOWLEDGE_DIR / "profile.example.md"
 _PROFILE = _KNOWLEDGE_DIR / "profile.md"
 _ENV_FILE = Path(".env")
-_KEY_URL = "https://cloud.browser-use.com/settings?tab=api-keys&new=1"
+
+_PROVIDERS: dict[str, dict[str, str]] = {
+    "browseruse": {
+        "env": "BROWSER_USE_API_KEY",
+        "label": "Browser Use (default — cheapest, no extra deps)",
+        "url": "https://cloud.browser-use.com/settings?tab=api-keys&new=1",
+    },
+    "openai": {
+        "env": "OPENAI_API_KEY",
+        "label": "OpenAI (requires: uv sync --extra openai)",
+        "url": "https://platform.openai.com/api-keys",
+    },
+    "anthropic": {
+        "env": "ANTHROPIC_API_KEY",
+        "label": "Anthropic (requires: uv sync --extra anthropic)",
+        "url": "https://console.anthropic.com/settings/keys",
+    },
+}
+
+
+def _detect_provider() -> str | None:
+    """Return the first provider whose API key is present in the environment."""
+    saved = os.environ.get("AUTOFILL_PROVIDER", "").strip().lower()
+    if saved in _PROVIDERS and os.environ.get(_PROVIDERS[saved]["env"]):
+        return saved
+    for name, info in _PROVIDERS.items():
+        if os.environ.get(info["env"]):
+            return name
+    return None
+
+
+def _has_any_api_key() -> bool:
+    return _detect_provider() is not None
 
 
 def _client() -> chromadb.ClientAPI:
@@ -207,15 +239,15 @@ def _onboard_profile() -> None:
     print("\n--- Profile setup ---")
     print("I need some info about you so I can fill forms on your behalf.\n")
 
-    name = _ask("Full name: ")
-    dob = _ask("Date of birth (or press Enter to skip): ")
+    name = _ask("Full Name: ")
+    dob = _ask("Date of Birth (MM/DD/YYYY, or press Enter to skip): ")
     email = _ask("Email: ")
     phone = _ask("Phone (or press Enter to skip): ")
-    location = _ask("Location (city, country): ")
+    location = _ask("Location (City, Country): ")
     linkedin = _ask("LinkedIn URL (or press Enter to skip): ")
     x_handle = _ask("X / Twitter URL (or press Enter to skip): ")
     github = _ask("GitHub URL (or press Enter to skip): ")
-    summary = _ask("One-line about yourself (work, education, interests): ")
+    summary = _ask("One-Line About Yourself (work, education, interests): ")
 
     lines = [f"# {name}\n"]
     lines.append(f"- **Full name:** {name}")
@@ -244,22 +276,41 @@ def _onboard_profile() -> None:
 
 
 def _onboard_api_key() -> None:
-    """Prompt for BROWSER_USE_API_KEY if not set."""
-    if os.environ.get("BROWSER_USE_API_KEY"):
+    """Prompt for an LLM API key if none is set, letting the user pick a provider."""
+    if _has_any_api_key():
         return
 
     print("\n--- API key setup ---")
-    print(f"You need a Browser Use API key. Get one here:\n  {_KEY_URL}\n")
+    print("Which LLM provider would you like to use?\n")
+
+    names = list(_PROVIDERS)
+    for i, name in enumerate(names, 1):
+        print(f"  {i}. {_PROVIDERS[name]['label']}")
+    print()
+
+    choice = _ask("Enter 1, 2, or 3 (default 1): ", "1")
+    try:
+        provider = names[int(choice) - 1]
+    except (ValueError, IndexError):
+        provider = "browseruse"
+
+    info = _PROVIDERS[provider]
+    print(f"\nGet a key here:\n  {info['url']}\n")
 
     key = _ask("Paste your API key (or Enter to skip for now): ")
     if key:
         with open(_ENV_FILE, "a") as f:
-            f.write(f'export BROWSER_USE_API_KEY="{key}"\n')
+            f.write(f"export {info['env']}=\"{key}\"\n")
+            f.write(f'export AUTOFILL_PROVIDER="{provider}"\n')
         _ENV_FILE.chmod(0o600)
-        os.environ["BROWSER_USE_API_KEY"] = key
+        os.environ[info["env"]] = key
+        os.environ["AUTOFILL_PROVIDER"] = provider
         print("Saved to .env.\n")
+
+        if provider != "browseruse":
+            print(f"Tip: run `uv sync --extra {provider}` to install the provider deps.\n")
     else:
-        print("Skipped. Set BROWSER_USE_API_KEY before running autofill.\n")
+        print("Skipped. Set an API key before running autofill.\n")
 
 
 def _onboard_files() -> None:
@@ -278,8 +329,11 @@ def _onboard() -> None:
     """Run the full first-time setup: profile, API key, extra files, then ingest."""
     _onboard_profile()
     _onboard_api_key()
-    if not os.environ.get("BROWSER_USE_API_KEY"):
-        raise SystemExit("No API key set. Run autofill again after setting BROWSER_USE_API_KEY.")
+    if not _has_any_api_key():
+        raise SystemExit(
+            "No API key set. Set BROWSER_USE_API_KEY, OPENAI_API_KEY, or "
+            "ANTHROPIC_API_KEY, then run autofill again."
+        )
     _onboard_files()
     print("Building your profile database...")
     ingest()
@@ -295,17 +349,17 @@ def _onboard() -> None:
 def _uninstall() -> None:
     import shutil
     repo_root = Path(__file__).resolve().parent.parent
-    bin_path = repo_root / "bin" / "autofill"
+    symlink = Path.home() / ".local" / "bin" / "autofill"
 
-    # Remove PATH entry from shell rc files
-    for rc in (Path.home() / ".zshrc", Path.home() / ".bashrc"):
-        if rc.exists():
-            lines = rc.read_text().splitlines(keepends=True)
-            filtered = [l for l in lines if str(bin_path.parent) not in l]
-            if len(filtered) != len(lines):
-                rc.write_text("".join(filtered))
+    print(f"This will delete {repo_root} (including your profile and knowledge files).")
+    confirm = _ask("Are you sure? (y/N): ", "n")
+    if not confirm.lower().startswith("y"):
+        print("Cancelled.")
+        return
 
-    # Remove the install directory
+    if symlink.is_symlink():
+        symlink.unlink()
+
     shutil.rmtree(repo_root)
     print("autofill uninstalled.")
 
@@ -319,8 +373,8 @@ def cli() -> None:
     parser.add_argument(
         "--provider",
         choices=["anthropic", "openai", "browseruse"],
-        default="browseruse",
-        help="LLM provider to use (default: browseruse)",
+        default=None,
+        help="LLM provider (auto-detected from API key if omitted)",
     )
     args = parser.parse_args()
 
@@ -328,10 +382,7 @@ def cli() -> None:
         _uninstall()
         return
 
-    needs_setup = (
-        not _has_profile_content()
-        or not os.environ.get("BROWSER_USE_API_KEY")
-    )
+    needs_setup = not _has_profile_content() or not _has_any_api_key()
 
     if needs_setup:
         _onboard()
@@ -343,8 +394,9 @@ def cli() -> None:
             print("Usage: autofill <form-url>")
         return
 
+    provider = args.provider or _detect_provider() or "browseruse"
     ingest()
-    asyncio.run(main(args.command, args.provider))
+    asyncio.run(main(args.command, provider))
 
 
 if __name__ == "__main__":
