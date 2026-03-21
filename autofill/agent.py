@@ -280,11 +280,30 @@ def _onboard() -> None:
     print("Done! You're all set.\n")
 
 
+def _uninstall() -> None:
+    import shutil
+    repo_root = Path(__file__).resolve().parent.parent
+    bin_path = repo_root / "bin" / "autofill"
+
+    # Remove PATH entry from shell rc files
+    for rc in (Path.home() / ".zshrc", Path.home() / ".bashrc"):
+        if rc.exists():
+            lines = rc.read_text().splitlines(keepends=True)
+            filtered = [l for l in lines if str(bin_path.parent) not in l]
+            if len(filtered) != len(lines):
+                rc.write_text("".join(filtered))
+
+    # Remove the install directory
+    shutil.rmtree(repo_root)
+    print("autofill uninstalled.")
+
+
 def cli() -> None:
     load_dotenv()
     import argparse
     parser = argparse.ArgumentParser(description="AI-powered form autofill")
-    parser.add_argument("url", nargs="?", default=None, help="URL of the form to fill")
+    parser.add_argument("command", nargs="?", default=None,
+                        help="URL of the form to fill, or 'uninstall'")
     parser.add_argument(
         "--provider",
         choices=["anthropic", "openai", "browseruse"],
@@ -292,6 +311,10 @@ def cli() -> None:
         help="LLM provider to use (default: browseruse)",
     )
     args = parser.parse_args()
+
+    if args.command == "uninstall":
+        _uninstall()
+        return
 
     needs_setup = (
         not _has_profile_content()
@@ -301,7 +324,7 @@ def cli() -> None:
     if needs_setup:
         _onboard()
 
-    if not args.url:
+    if not args.command:
         if needs_setup:
             print("Setup complete. Next time run: autofill <form-url>")
         else:
@@ -309,7 +332,7 @@ def cli() -> None:
         return
 
     ingest()
-    asyncio.run(main(args.url, args.provider))
+    asyncio.run(main(args.command, args.provider))
 
 
 if __name__ == "__main__":
