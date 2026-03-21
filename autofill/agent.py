@@ -35,6 +35,31 @@ def _hash(path: Path) -> str:
     return hashlib.md5(path.read_bytes()).hexdigest()
 
 
+_CHUNK_SIZE = 1000
+_CHUNK_OVERLAP = 200
+
+
+def _chunk_text(text: str) -> list[str]:
+    """Split text into chunks of ~_CHUNK_SIZE chars, preferring paragraph/sentence boundaries."""
+    separators = ["\n\n", "\n", ". ", " "]
+    chunks: list[str] = []
+    start = 0
+    while start < len(text):
+        end = min(start + _CHUNK_SIZE, len(text))
+        if end < len(text):
+            # Try each separator to find a clean break point
+            for sep in separators:
+                pos = text.rfind(sep, start, end)
+                if pos > start:
+                    end = pos + len(sep)
+                    break
+        chunk = text[start:end].strip()
+        if chunk:
+            chunks.append(chunk)
+        start = end - _CHUNK_OVERLAP if end < len(text) else end
+    return chunks
+
+
 def ingest() -> None:
     col = _client().get_or_create_collection(_COLLECTION)
 
@@ -67,7 +92,7 @@ def ingest() -> None:
             continue
         if fname in stored_ids:
             col.delete(ids=stored_ids[fname])
-        chunks = [c.strip() for c in _read(path).split("\n\n") if c.strip()]
+        chunks = _chunk_text(_read(path))
         if not chunks:
             continue
         col.upsert(
@@ -77,7 +102,7 @@ def ingest() -> None:
         )
 
 
-def retrieve(query: str, n: int = 5) -> str:
+def retrieve(query: str, n: int = 10) -> str:
     col = _client().get_or_create_collection(_COLLECTION)
     results = col.query(query_texts=[query], n_results=n)
     docs: list[str] = results["documents"][0]  # type: ignore[index]
