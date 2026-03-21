@@ -24,7 +24,7 @@ def _client() -> chromadb.ClientAPI:
     return chromadb.PersistentClient(path=str(_DB_PATH))
 
 
-_MAX_TEXT_CHARS = 500_000
+_MAX_TEXT_CHARS = 100_000
 
 
 def _read(path: Path) -> str:
@@ -105,17 +105,15 @@ def ingest() -> None:
     if not to_ingest:
         return
 
-    all_work: list[tuple[str, str, list[str]]] = []
-    for fname, path in to_ingest.items():
-        if fname in stored_ids:
-            col.delete(ids=stored_ids[fname])
-        chunks = _chunk_text(_read(path))
-        if chunks:
-            all_work.append((fname, hashes[fname], chunks))
-
-    total_chunks = sum(len(c) for _, _, c in all_work)
-    with tqdm(total=total_chunks, desc="Indexing", unit="chunk") as bar:
-        for fname, h, chunks in all_work:
+    with tqdm(to_ingest.items(), desc="Indexing", unit="file") as bar:
+        for fname, path in bar:
+            bar.set_postfix_str(fname)
+            h = hashes[fname]
+            if fname in stored_ids:
+                col.delete(ids=stored_ids[fname])
+            chunks = _chunk_text(_read(path))
+            if not chunks:
+                continue
             for i in range(0, len(chunks), _UPSERT_BATCH):
                 batch = chunks[i : i + _UPSERT_BATCH]
                 col.upsert(
@@ -123,7 +121,6 @@ def ingest() -> None:
                     documents=batch,
                     metadatas=[{"hash": h}] * len(batch),
                 )
-                bar.update(len(batch))
 
 
 def retrieve(query: str, n: int = 10) -> str:
