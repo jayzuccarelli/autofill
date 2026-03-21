@@ -18,18 +18,20 @@ install_uv() {
   export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
 }
 
-add_to_path() {
-  local bin_dir="$1/bin"
-  local line="export PATH=\"${bin_dir}:\$PATH\""
+link_binary() {
+  local target="$1/bin/autofill"
+  local link_dir="${HOME}/.local/bin"
+  mkdir -p "$link_dir"
+  ln -sf "$target" "$link_dir/autofill"
 
-  # Write to every rc file that exists so it works regardless of shell
-  for rc in "${HOME}/.zshrc" "${HOME}/.bashrc" "${HOME}/.bash_profile"; do
-    if [[ -f "$rc" ]] && ! grep -q "autofill/bin" "$rc" 2>/dev/null; then
-      printf '\n# autofill\n%s\n' "$line" >> "$rc"
-    fi
-  done
-
-  export PATH="${bin_dir}:${PATH}"
+  # If ~/.local/bin isn't on PATH yet, add it to shell rc files
+  if ! echo "$PATH" | tr ':' '\n' | grep -qx "$link_dir"; then
+    for rc in "${HOME}/.zshrc" "${HOME}/.bashrc" "${HOME}/.bash_profile"; do
+      if [[ -f "$rc" ]] && ! grep -q '\.local/bin' "$rc" 2>/dev/null; then
+        printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc"
+      fi
+    done
+  fi
 }
 
 # --- Local path (./install.sh from inside a clone) ---
@@ -44,7 +46,7 @@ if [[ -n "$_script" && "$_script" != "-" ]]; then
       exit 1
     fi
     uv sync --quiet
-    add_to_path "$SCRIPT_DIR"
+    link_binary "$SCRIPT_DIR"
     echo ""
     printf '✓ autofill installed. Run \033[1;32mautofill\033[0m to get started.\n'
     exit 0
@@ -75,7 +77,7 @@ else
   uv sync --quiet
 fi
 
-add_to_path "$INSTALL_DIR"
+link_binary "$INSTALL_DIR"
 
 echo ""
 printf '✓ autofill installed. Run \033[1;32mautofill\033[0m to get started.\n'

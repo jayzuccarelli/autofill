@@ -8,7 +8,7 @@ Built on [browser-use](https://github.com/browser-use/browser-use).
 
 ## LLM Quickstart
 
-For Cursor, Claude Code, Copilot, etc.: **start with [`AGENTS.md`](AGENTS.md)**. Claude Code also loads [`CLAUDE.md`](CLAUDE.md).
+For Cursor, Claude Code, Copilot, etc.: start with [`AGENTS.md`](AGENTS.md). Claude Code also loads [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
@@ -20,7 +20,6 @@ Open a terminal and run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jayzuccarelli/autofill/main/install.sh | bash
-source ~/.zshrc 2>/dev/null || source ~/.bashrc
 ```
 
 ### Setup
