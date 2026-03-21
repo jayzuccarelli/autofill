@@ -26,12 +26,8 @@ add_to_path() {
   elif [[ -f "${HOME}/.bashrc" ]]; then
     shell_rc="${HOME}/.bashrc"
   fi
-  if [[ -n "$shell_rc" ]]; then
-    if ! grep -q "autofill/bin" "$shell_rc" 2>/dev/null; then
-      printf '\n# autofill\nexport PATH="%s:$PATH"\n' "$bin_dir" >> "$shell_rc"
-    fi
-    # Reload so `autofill` works in this same shell — no "open a new terminal".
-    source "$shell_rc"
+  if [[ -n "$shell_rc" ]] && ! grep -q "autofill/bin" "$shell_rc" 2>/dev/null; then
+    printf '\n# autofill\nexport PATH="%s:$PATH"\n' "$bin_dir" >> "$shell_rc"
   fi
   export PATH="${bin_dir}:${PATH}"
 }
@@ -47,7 +43,7 @@ if [[ -n "$_script" && "$_script" != "-" ]]; then
       echo "uv installed but not on PATH. Open a new terminal and try again." >&2
       exit 1
     fi
-    uv sync
+    uv sync --quiet
     add_to_path "$SCRIPT_DIR"
     echo ""
     printf '✓ autofill installed. Run \033[1;32mautofill\033[0m to get started.\n'
@@ -64,7 +60,7 @@ fi
 
 if [[ -f "${INSTALL_DIR}/pyproject.toml" ]]; then
   cd "$INSTALL_DIR"
-  uv sync
+  uv sync --quiet
 elif [[ -d "${INSTALL_DIR}" ]]; then
   echo "INSTALL_DIR exists but is not this project: ${INSTALL_DIR}" >&2
   exit 1
@@ -76,7 +72,7 @@ else
   echo "Cloning into ${INSTALL_DIR}…"
   git clone "$REPO_URL" "$INSTALL_DIR"
   cd "$INSTALL_DIR"
-  uv sync
+  uv sync --quiet
 fi
 
 add_to_path "$INSTALL_DIR"
