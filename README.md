@@ -36,7 +36,7 @@ Edit `knowledge/profile.md` with real info (gitignored).
 
 **3. API key**
 
-If you pasted during install, you’re done — autofill loads `.env` on startup. Otherwise put `BROWSER_USE_API_KEY` in `.env` or your environment ([get a key](https://cloud.browser-use.com/new-api-key)).
+If you pasted during install, you’re done — autofill loads `.env` on startup. Otherwise put `BROWSER_USE_API_KEY` in `.env` or your environment ([create a key](https://cloud.browser-use.com/settings?tab=api-keys&new=1)).
 
 **4. Run**
 

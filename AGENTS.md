@@ -12,7 +12,7 @@ Instructions for coding agents (Cursor, Copilot, Devin, etc.) working on **autof
 
 - **Package manager:** [uv](https://docs.astral.sh/uv/). Install deps: `uv sync` (lockfile: [`uv.lock`](uv.lock)).
 - **Optional extras:** `uv sync --extra anthropic` / `--extra openai` for non-default LLM providers.
-- **Secrets:** `.env` in repo root (gitignored). `load_dotenv()` runs at start of `cli()`. Default provider needs `BROWSER_USE_API_KEY` ([Browser Use Cloud](https://cloud.browser-use.com/new-api-key)).
+- **Secrets:** `.env` in repo root (gitignored). `load_dotenv()` runs at start of `cli()`. Default provider needs `BROWSER_USE_API_KEY` ([API keys](https://cloud.browser-use.com/settings?tab=api-keys&new=1)).
 - **One-shot install for humans:** [`install.sh`](install.sh) + see [README.md](README.md).
 
 ## Run

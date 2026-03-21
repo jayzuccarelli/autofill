@@ -9,6 +9,8 @@ export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
 # Canonical public repo (change only if you fork or rename).
 REPO_URL="${REPO_URL:-https://github.com/jayzuccarelli/autofill.git}"
 INSTALL_DIR="${INSTALL_DIR:-${HOME}/autofill}"
+# Where to create a Browser Use API key (printed only; never auto-open the browser).
+BROWSER_USE_KEY_URL="${BROWSER_USE_KEY_URL:-https://cloud.browser-use.com/settings?tab=api-keys&new=1}"
 
 install_uv() {
   if command -v uv >/dev/null 2>&1; then
@@ -30,19 +32,21 @@ prompt_api_key() {
     return 0
   fi
   if [[ ! -t 0 ]]; then
-    echo "Get an API key: https://cloud.browser-use.com/new-api-key"
-    command -v open >/dev/null 2>&1 && open "https://cloud.browser-use.com/new-api-key" || true
+    echo "Visit this page in your browser to create an API key, then add it to ${root}/.env or export BROWSER_USE_API_KEY:"
+    echo "  ${BROWSER_USE_KEY_URL}"
     return 0
   fi
   echo ""
-  read -r -p "Paste your Browser Use API key (Enter to open the key page instead): " key || true
+  echo "Visit this page to get a Browser Use API key (nothing will open automatically):"
+  echo "  ${BROWSER_USE_KEY_URL}"
+  echo ""
+  read -r -p "Paste your API key here (or press Enter to skip and set it later): " key || true
   if [[ -n "${key:-}" ]]; then
     printf 'export BROWSER_USE_API_KEY=%q\n' "$key" > "${root}/.env"
     chmod 600 "${root}/.env"
-    echo "Saved. You don't need to do anything else with the key — autofill reads .env when you run it."
+    echo "Saved. autofill reads .env when you run it."
   else
-    echo "Get a key: https://cloud.browser-use.com/new-api-key"
-    command -v open >/dev/null 2>&1 && open "https://cloud.browser-use.com/new-api-key" || true
+    echo "Skipped. Set BROWSER_USE_API_KEY in ${root}/.env or your environment before running autofill."
   fi
 }
 
