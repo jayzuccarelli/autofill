@@ -24,13 +24,18 @@ link_binary() {
   mkdir -p "$link_dir"
   ln -sf "$target" "$link_dir/autofill"
 
-  # If ~/.local/bin isn't on PATH yet, add it to shell rc files
-  if ! echo "$PATH" | tr ':' '\n' | grep -qx "$link_dir"; then
-    for rc in "${HOME}/.zshrc" "${HOME}/.bashrc" "${HOME}/.bash_profile"; do
-      if [[ -f "$rc" ]] && ! grep -q '\.local/bin' "$rc" 2>/dev/null; then
-        printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc"
-      fi
-    done
+  # Ensure ~/.local/bin is on PATH in the user's shell rc
+  local current_shell
+  current_shell="$(basename "${SHELL:-/bin/bash}")"
+  local rc
+  if [[ "$current_shell" == "zsh" ]]; then
+    rc="${HOME}/.zshrc"
+  else
+    rc="${HOME}/.bash_profile"
+  fi
+  touch "$rc"
+  if ! grep -q '\.local/bin' "$rc" 2>/dev/null; then
+    printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc"
   fi
 }
 
@@ -80,4 +85,4 @@ fi
 link_binary "$INSTALL_DIR"
 
 echo ""
-printf '✓ autofill installed. Run \033[1;32mautofill\033[0m to get started.\n'
+printf '✓ autofill installed.\n\n  Open a new terminal, then run: \033[1;32mautofill\033[0m\n'
