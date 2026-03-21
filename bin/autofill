@@ -1,0 +1,5 @@
+#!/usr/bin/env bash
+# Wrapper so users run "autofill" without knowing about uv/venv.
+set -euo pipefail
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
+exec "${SCRIPT_DIR}/.venv/bin/python" -m autofill.agent "$@"
