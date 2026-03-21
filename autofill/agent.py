@@ -208,19 +208,31 @@ def _onboard_profile() -> None:
     print("I need some info about you so I can fill forms on your behalf.\n")
 
     name = _ask("Full name: ")
+    dob = _ask("Date of birth (or press Enter to skip): ")
     email = _ask("Email: ")
     phone = _ask("Phone (or press Enter to skip): ")
     location = _ask("Location (city, country): ")
+    linkedin = _ask("LinkedIn URL (or press Enter to skip): ")
+    x_handle = _ask("X / Twitter URL (or press Enter to skip): ")
+    github = _ask("GitHub URL (or press Enter to skip): ")
     summary = _ask("One-line about yourself (work, education, interests): ")
 
     lines = [f"# {name}\n"]
     lines.append(f"- **Full name:** {name}")
+    if dob:
+        lines.append(f"- **Date of birth:** {dob}")
     if email:
         lines.append(f"- **Email:** {email}")
     if phone:
         lines.append(f"- **Phone:** {phone}")
     if location:
         lines.append(f"- **Location:** {location}")
+    if linkedin:
+        lines.append(f"- **LinkedIn:** {linkedin}")
+    if x_handle:
+        lines.append(f"- **X:** {x_handle}")
+    if github:
+        lines.append(f"- **GitHub:** {github}")
     if summary:
         lines.append(f"- **About:** {summary}")
     lines.append("")
