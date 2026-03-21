@@ -20,15 +20,15 @@ install_uv() {
 
 add_to_path() {
   local bin_dir="$1/bin"
-  local shell_rc=""
-  if [[ -f "${HOME}/.zshrc" ]]; then
-    shell_rc="${HOME}/.zshrc"
-  elif [[ -f "${HOME}/.bashrc" ]]; then
-    shell_rc="${HOME}/.bashrc"
-  fi
-  if [[ -n "$shell_rc" ]] && ! grep -q "autofill/bin" "$shell_rc" 2>/dev/null; then
-    printf '\n# autofill\nexport PATH="%s:$PATH"\n' "$bin_dir" >> "$shell_rc"
-  fi
+  local line="export PATH=\"${bin_dir}:\$PATH\""
+
+  # Write to every rc file that exists so it works regardless of shell
+  for rc in "${HOME}/.zshrc" "${HOME}/.bashrc" "${HOME}/.bash_profile"; do
+    if [[ -f "$rc" ]] && ! grep -q "autofill/bin" "$rc" 2>/dev/null; then
+      printf '\n# autofill\n%s\n' "$line" >> "$rc"
+    fi
+  done
+
   export PATH="${bin_dir}:${PATH}"
 }
 

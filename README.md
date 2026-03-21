@@ -12,35 +12,42 @@ For Cursor, Claude Code, Copilot, etc.: **start with [`AGENTS.md`](AGENTS.md)**.
 
 ---
 
-## Install
+## Human Quickstart
+
+### Install
+
+Open a terminal and run:
 
 ```bash
 curl -fsSL https://raw.githubusercontent.com/jayzuccarelli/autofill/main/install.sh | bash
+source ~/.zshrc 2>/dev/null || source ~/.bashrc
 ```
 
-Then open a new terminal (or `source ~/.zshrc`).
-
----
-
-## Use
+### Setup
 
 ```bash
 autofill
 ```
 
-The first time you run it, autofill walks you through setup:
-1. **Profile** — asks your name, email, phone, location, and a short summary; saves to `knowledge/profile.md`.
+The first time you run it, autofill walks you through:
+1. **Profile** — asks your name, date of birth, email, phone, location, socials, and a short summary; saves to `knowledge/profile.md`.
 2. **API key** — shows where to get a Browser Use key and lets you paste it; saves to `.env`.
 3. **Extra files** — optionally add resumes, cover letters, etc. to `knowledge/`.
 4. **Builds the database** — indexes everything under `knowledge/` so it's ready.
 
-After setup:
+### Fill a form
 
 ```bash
 autofill https://jobs.example.com/apply
 ```
 
 The agent opens a browser, fills the form, and leaves it open for you to review and submit.
+
+### Uninstall
+
+```bash
+autofill uninstall
+```
 
 ---
 
