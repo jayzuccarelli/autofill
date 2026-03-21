@@ -130,6 +130,8 @@ Rules:
 
 def _has_profile_content() -> bool:
     """True if knowledge/ has at least one non-hidden, non-example file with real content."""
+    if not _KNOWLEDGE_DIR.is_dir():
+        return False
     for p in sorted(_KNOWLEDGE_DIR.iterdir()):
         if p.name.startswith(".") or not p.is_file():
             continue
