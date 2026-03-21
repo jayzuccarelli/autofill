@@ -2,6 +2,7 @@
 
 import asyncio
 import hashlib
+import os
 from pathlib import Path
 
 import browser_use as bu
@@ -11,6 +12,10 @@ from dotenv import load_dotenv
 _KNOWLEDGE_DIR = Path("knowledge")
 _DB_PATH = _KNOWLEDGE_DIR / ".db"
 _COLLECTION = "profile"
+_PROFILE_EXAMPLE = _KNOWLEDGE_DIR / "profile.example.md"
+_PROFILE = _KNOWLEDGE_DIR / "profile.md"
+_ENV_FILE = Path(".env")
+_KEY_URL = "https://cloud.browser-use.com/settings?tab=api-keys&new=1"
 
 
 def _client() -> chromadb.ClientAPI:
@@ -123,11 +128,115 @@ Rules:
     )
 
 
+def _has_profile_content() -> bool:
+    """True if knowledge/ has at least one non-hidden, non-example file with real content."""
+    for p in sorted(_KNOWLEDGE_DIR.iterdir()):
+        if p.name.startswith(".") or not p.is_file():
+            continue
+        if p.name == "profile.example.md":
+            continue
+        if p.stat().st_size > 0:
+            return True
+    return False
+
+
+def _ask(prompt: str, default: str = "") -> str:
+    try:
+        val = input(prompt).strip()
+    except (EOFError, KeyboardInterrupt):
+        print()
+        val = ""
+    return val or default
+
+
+def _onboard_profile() -> None:
+    """Walk the user through creating knowledge/profile.md if it doesn't exist."""
+    if _has_profile_content():
+        return
+
+    print("\n--- Profile setup ---")
+    print("I need some info about you so I can fill forms on your behalf.\n")
+
+    name = _ask("Full name: ")
+    email = _ask("Email: ")
+    phone = _ask("Phone (or press Enter to skip): ")
+    location = _ask("Location (city, country): ")
+    summary = _ask("One-line about yourself (work, education, interests): ")
+
+    lines = [f"# {name}\n"]
+    lines.append("## Contact\n")
+    if email:
+        lines.append(f"- **Email:** {email}")
+    if phone:
+        lines.append(f"- **Phone:** {phone}")
+    if location:
+        lines.append(f"- **Location:** {location}")
+    lines.append("")
+    if summary:
+        lines.append("## Summary\n")
+        lines.append(summary)
+        lines.append("")
+
+    _KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
+    _PROFILE.write_text("\n".join(lines))
+    print(f"\nSaved to {_PROFILE}. Edit it any time to add more detail.")
+    print("You can also drop extra files (PDF, markdown, text) into knowledge/.\n")
+
+
+def _onboard_api_key() -> None:
+    """Prompt for BROWSER_USE_API_KEY if not set."""
+    if os.environ.get("BROWSER_USE_API_KEY"):
+        return
+
+    print("\n--- API key setup ---")
+    print(f"You need a Browser Use API key. Get one here:\n  {_KEY_URL}\n")
+
+    key = _ask("Paste your API key (or Enter to skip for now): ")
+    if key:
+        with open(_ENV_FILE, "a") as f:
+            f.write(f'export BROWSER_USE_API_KEY="{key}"\n')
+        _ENV_FILE.chmod(0o600)
+        os.environ["BROWSER_USE_API_KEY"] = key
+        print("Saved to .env.\n")
+    else:
+        print("Skipped. Set BROWSER_USE_API_KEY before running autofill.\n")
+
+
+def _onboard_files() -> None:
+    """Ask the user if they want to add extra files to knowledge/."""
+    print("--- Additional files ---")
+    print("You can add resumes, cover letters, etc. to the knowledge/ folder.")
+    print("Supported: .md, .txt, .pdf")
+    answer = _ask("Do you have files to add now? (y/N): ", "n")
+    if answer.lower().startswith("y"):
+        print(f"Drop your files into: {_KNOWLEDGE_DIR.resolve()}")
+        _ask("Press Enter when done...")
+    print()
+
+
+def _onboard() -> None:
+    """Run the full first-time setup: profile, API key, extra files, then ingest."""
+    _onboard_profile()
+    _onboard_api_key()
+    if not os.environ.get("BROWSER_USE_API_KEY"):
+        raise SystemExit("No API key set. Run autofill again after setting BROWSER_USE_API_KEY.")
+    _onboard_files()
+    print("Building your profile database...")
+    ingest()
+    profile = retrieve("contact identity address work experience")
+    if not profile.strip():
+        raise SystemExit(
+            "No profile content found after indexing. "
+            "Add info to knowledge/profile.md and run autofill again."
+        )
+    print("Done! You're all set.\n")
+
+
 def cli() -> None:
-    load_dotenv()  # load .env from cwd so API keys work without `source .env`
+    load_dotenv()
     import argparse
     parser = argparse.ArgumentParser(description="AI-powered form autofill")
-    parser.add_argument("url", help="URL of the form to fill")
+    parser.add_argument("url", nargs="?", default=None, help="URL of the form to fill")
     parser.add_argument(
         "--provider",
         choices=["anthropic", "openai", "browseruse"],
@@ -135,6 +244,23 @@ def cli() -> None:
         help="LLM provider to use (default: browseruse)",
     )
     args = parser.parse_args()
+
+    needs_setup = (
+        not _has_profile_content()
+        or not os.environ.get("BROWSER_USE_API_KEY")
+    )
+
+    if needs_setup:
+        _onboard()
+
+    if not args.url:
+        if needs_setup:
+            print("Setup complete. Next time run: autofill <form-url>")
+        else:
+            print("Usage: autofill <form-url>")
+        return
+
+    ingest()
     asyncio.run(main(args.url, args.provider))
 
 
