@@ -7,8 +7,19 @@ from pathlib import Path
 
 import browser_use as bu
 import chromadb
+import questionary
 from dotenv import load_dotenv
-from tqdm import tqdm
+from rich.console import Console
+from rich.panel import Panel
+from rich.progress import (
+    BarColumn,
+    MofNCompleteColumn,
+    Progress,
+    SpinnerColumn,
+    TextColumn,
+)
+from rich.rule import Rule
+from rich.theme import Theme
 
 _KNOWLEDGE_DIR = Path("knowledge")
 _DB_PATH = _KNOWLEDGE_DIR / ".db"
@@ -34,6 +45,34 @@ _PROVIDERS: dict[str, dict[str, str]] = {
         "url": "https://console.anthropic.com/settings/keys",
     },
 }
+
+_ACCENT = "#7B68EE"
+_VERSION = "0.1.0"
+
+_THEME = Theme(
+    {"accent": _ACCENT, "success": "green", "info": "dim", "err": "bold red"}
+)
+console = Console(theme=_THEME)
+
+_Q_STYLE = questionary.Style(
+    [
+        ("qmark", f"fg:{_ACCENT} bold"),
+        ("question", "bold"),
+        ("answer", f"fg:{_ACCENT} bold"),
+        ("pointer", f"fg:{_ACCENT} bold"),
+        ("highlighted", f"fg:{_ACCENT} bold"),
+        ("selected", f"fg:{_ACCENT}"),
+    ]
+)
+
+_LOGO = """\
+       _____
+     .'     '.
+    / (◉)-(◉) \\
+   |    \\_/    |
+    '.._____.'
+   /|/ | | \\|\\
+  (_/  | |  \\_)"""
 
 
 def _detect_provider() -> str | None:
@@ -137,14 +176,22 @@ def ingest() -> None:
     if not to_ingest:
         return
 
-    with tqdm(to_ingest.items(), desc="Indexing", unit="file") as bar:
-        for fname, path in bar:
-            bar.set_postfix_str(fname)
+    with Progress(
+        SpinnerColumn(style="accent"),
+        TextColumn("[accent]{task.description}[/]"),
+        BarColumn(complete_style="accent"),
+        MofNCompleteColumn(),
+        console=console,
+    ) as progress:
+        task_id = progress.add_task("Indexing", total=len(to_ingest))
+        for fname, path in to_ingest.items():
+            progress.update(task_id, description=f"Indexing [bold]{fname}[/]")
             h = hashes[fname]
             if fname in stored_ids:
                 col.delete(ids=stored_ids[fname])
             chunks = _chunk_text(_read(path))
             if not chunks:
+                progress.advance(task_id)
                 continue
             for i in range(0, len(chunks), _UPSERT_BATCH):
                 batch = chunks[i : i + _UPSERT_BATCH]
@@ -153,6 +200,7 @@ def ingest() -> None:
                     documents=batch,
                     metadatas=[{"hash": h}] * len(batch),
                 )
+            progress.advance(task_id)
 
 
 def retrieve(query: str, n: int = 10) -> str:
@@ -202,9 +250,11 @@ Rules:
     browser_profile = bu.BrowserProfile(keep_alive=True, headless=False)
     agent = bu.Agent(task=task, llm=llm, browser_profile=browser_profile)
     await agent.run()
+    console.print(
+        "\n[success]✓[/] Browser left open — review and submit in the window."
+    )
     await asyncio.to_thread(
-        input,
-        "Browser left open — review and submit in the window. Press Enter here to exit when finished. ",
+        input, "  Press Enter to exit when finished. "
     )
 
 
@@ -224,11 +274,11 @@ def _has_profile_content() -> bool:
 
 def _ask(prompt: str, default: str = "") -> str:
     try:
-        val = input(prompt).strip()
+        val = questionary.text(prompt, style=_Q_STYLE).ask()
     except (EOFError, KeyboardInterrupt):
-        print()
-        val = ""
-    return val or default
+        console.print()
+        val = None
+    return (val or "").strip() or default
 
 
 def _onboard_profile() -> None:
@@ -236,18 +286,19 @@ def _onboard_profile() -> None:
     if _has_profile_content():
         return
 
-    print("\n--- Profile setup ---")
-    print("I need some info about you so I can fill forms on your behalf.\n")
+    console.print()
+    console.print(Rule("Profile", style="accent"))
+    console.print("I need some info to fill forms on your behalf.\n", style="info")
 
-    name = _ask("Full Name: ")
-    dob = _ask("Date of Birth (MM/DD/YYYY, or press Enter to skip): ")
-    email = _ask("Email: ")
-    phone = _ask("Phone (or press Enter to skip): ")
-    location = _ask("Location (City, Country): ")
-    linkedin = _ask("LinkedIn URL (or press Enter to skip): ")
-    x_handle = _ask("X / Twitter URL (or press Enter to skip): ")
-    github = _ask("GitHub URL (or press Enter to skip): ")
-    summary = _ask("One-Line About Yourself (work, education, interests): ")
+    name = _ask("Full name")
+    dob = _ask("Date of birth (MM/DD/YYYY, or Enter to skip)")
+    email = _ask("Email")
+    phone = _ask("Phone (or Enter to skip)")
+    location = _ask("Location (City, Country)")
+    linkedin = _ask("LinkedIn URL (or Enter to skip)")
+    x_handle = _ask("X / Twitter URL (or Enter to skip)")
+    github = _ask("GitHub URL (or Enter to skip)")
+    summary = _ask("One-line about yourself (work, education, interests)")
 
     lines = [f"# {name}\n"]
     lines.append(f"- **Full name:** {name}")
@@ -271,8 +322,11 @@ def _onboard_profile() -> None:
 
     _KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
     _PROFILE.write_text("\n".join(lines))
-    print(f"\nSaved to {_PROFILE}. Edit it any time to add more detail.")
-    print("You can also drop extra files (PDF, markdown, text) into knowledge/.\n")
+    console.print(f"\n[success]✓[/] Saved to [bold]{_PROFILE}[/]")
+    console.print(
+        "  Drop extra files (PDF, markdown, text) into knowledge/ any time.\n",
+        style="info",
+    )
 
 
 def _onboard_api_key() -> None:
@@ -280,24 +334,23 @@ def _onboard_api_key() -> None:
     if _has_any_api_key():
         return
 
-    print("\n--- API key setup ---")
-    print("Which LLM provider would you like to use?\n")
+    console.print()
+    console.print(Rule("API key", style="accent"))
 
     names = list(_PROVIDERS)
-    for i, name in enumerate(names, 1):
-        print(f"  {i}. {_PROVIDERS[name]['label']}")
-    print()
-
-    choice = _ask("Enter 1, 2, or 3 (default 1): ", "1")
-    try:
-        provider = names[int(choice) - 1]
-    except (ValueError, IndexError):
+    choices = [
+        questionary.Choice(title=_PROVIDERS[n]["label"], value=n) for n in names
+    ]
+    provider = questionary.select(
+        "Which LLM provider?", choices=choices, style=_Q_STYLE
+    ).ask()
+    if not provider:
         provider = "browseruse"
 
     info = _PROVIDERS[provider]
-    print(f"\nGet a key here:\n  {info['url']}\n")
+    console.print(f"\n  Get a key here: [accent]{info['url']}[/]\n")
 
-    key = _ask("Paste your API key (or Enter to skip for now): ")
+    key = _ask("Paste your API key (or Enter to skip)")
     if key:
         with open(_ENV_FILE, "a") as f:
             f.write(f"export {info['env']}=\"{key}\"\n")
@@ -305,25 +358,38 @@ def _onboard_api_key() -> None:
         _ENV_FILE.chmod(0o600)
         os.environ[info["env"]] = key
         os.environ["AUTOFILL_PROVIDER"] = provider
-        print("Saved to .env.\n")
+        console.print("[success]✓[/] Saved to .env\n")
     else:
-        print("Skipped. Set an API key before running autofill.\n")
+        console.print("[info]Skipped — set an API key before running autofill.[/]\n")
 
 
 def _onboard_files() -> None:
     """Ask the user if they want to add extra files to knowledge/."""
-    print("--- Additional files ---")
-    print("You can add resumes, cover letters, etc. to the knowledge/ folder.")
-    print("Supported: .md, .txt, .pdf")
-    answer = _ask("Do you have files to add now? (y/N): ", "n")
-    if answer.lower().startswith("y"):
-        print(f"Drop your files into: {_KNOWLEDGE_DIR.resolve()}")
-        _ask("Press Enter when done...")
-    print()
+    console.print(Rule("Additional files", style="accent"))
+    console.print(
+        "You can add resumes, cover letters, etc. (.md, .txt, .pdf)", style="info"
+    )
+    add = questionary.confirm(
+        "Add files to knowledge/ now?", default=False, style=_Q_STYLE
+    ).ask()
+    if add:
+        console.print(f"  Drop files into: [bold]{_KNOWLEDGE_DIR.resolve()}[/]")
+        _ask("Press Enter when done…")
+    console.print()
 
 
 def _onboard() -> None:
     """Run the full first-time setup: profile, API key, extra files, then ingest."""
+    console.print()
+    console.print(
+        Panel(
+            f"[accent]{_LOGO}[/]\n\n  [bold]autofill[/]  [dim]v{_VERSION}[/]",
+            border_style="accent",
+            padding=(1, 2),
+        )
+    )
+    console.print("  Welcome! Let's get you set up.\n")
+
     _onboard_profile()
     _onboard_api_key()
     if not _has_any_api_key():
@@ -332,7 +398,6 @@ def _onboard() -> None:
             "ANTHROPIC_API_KEY, then run autofill again."
         )
     _onboard_files()
-    print("Building your profile database...")
     ingest()
     profile = retrieve("contact identity address work experience")
     if not profile.strip():
@@ -340,25 +405,32 @@ def _onboard() -> None:
             "No profile content found after indexing. "
             "Add info to knowledge/profile.md and run autofill again."
         )
-    print("Done! You're all set.\n")
+    console.print("[success]✓[/] Done! You're all set.\n")
 
 
 def _uninstall() -> None:
     import shutil
+
     repo_root = Path(__file__).resolve().parent.parent
     symlink = Path.home() / ".local" / "bin" / "autofill"
 
-    print(f"This will delete {repo_root} (including your profile and knowledge files).")
-    confirm = _ask("Are you sure? (y/N): ", "n")
-    if not confirm.lower().startswith("y"):
-        print("Cancelled.")
+    console.print(
+        f"This will delete [bold]{repo_root}[/] "
+        "(including your profile and knowledge files).",
+        style="err",
+    )
+    confirm = questionary.confirm(
+        "Are you sure?", default=False, style=_Q_STYLE
+    ).ask()
+    if not confirm:
+        console.print("Cancelled.")
         return
 
     if symlink.is_symlink():
         symlink.unlink()
 
     shutil.rmtree(repo_root)
-    print("autofill uninstalled.")
+    console.print("[success]✓[/] autofill uninstalled.")
 
 
 def cli() -> None:
@@ -386,11 +458,17 @@ def cli() -> None:
 
     if not args.command:
         if needs_setup:
-            print("Setup complete. Next time run: autofill <form-url>")
+            console.print(
+                "Setup complete. Next: [bold]autofill <form-url>[/]"
+            )
         else:
-            print("Usage: autofill <form-url>")
+            console.print(
+                f"[accent]◉[/] [bold]autofill[/] [dim]v{_VERSION}[/]"
+            )
+            console.print("Usage: [bold]autofill <form-url>[/]")
         return
 
+    console.print(f"\n  [accent]◉[/] [bold]autofill[/] [dim]v{_VERSION}[/]\n")
     provider = args.provider or _detect_provider() or "browseruse"
     ingest()
     asyncio.run(main(args.command, provider))
