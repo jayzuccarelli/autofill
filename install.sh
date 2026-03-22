@@ -53,7 +53,11 @@ if [[ -n "$_script" && "$_script" != "-" ]]; then
     uv sync --quiet
     link_binary "$SCRIPT_DIR"
     echo ""
-    printf '✓ autofill installed.\n\n  Open a new terminal, then run: \033[1;32mautofill\033[0m\n'
+    if [[ ":$PATH:" == *":$HOME/.local/bin:"* ]]; then
+      printf '✓ autofill installed.\n\n  Run: \033[1;32mautofill\033[0m\n'
+    else
+      printf '✓ autofill installed.\n\n  Run: \033[1;32mexec $SHELL && autofill\033[0m\n'
+    fi
     exit 0
   fi
 fi
@@ -85,4 +89,8 @@ fi
 link_binary "$INSTALL_DIR"
 
 echo ""
-printf '✓ autofill installed.\n\n  Open a new terminal, then run: \033[1;32mautofill\033[0m\n'
+if [[ ":$PATH:" == *":$HOME/.local/bin:"* ]]; then
+  printf '✓ autofill installed.\n\n  Run: \033[1;32mautofill\033[0m\n'
+else
+  printf '✓ autofill installed.\n\n  Run: \033[1;32mexec $SHELL && autofill\033[0m\n'
+fi

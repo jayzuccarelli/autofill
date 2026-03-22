@@ -46,7 +46,7 @@ _PROVIDERS: dict[str, dict[str, str]] = {
     },
 }
 
-_ACCENT = "#7B68EE"
+_ACCENT = "#7851A9"
 _VERSION = "0.1.0"
 
 _THEME = Theme(
