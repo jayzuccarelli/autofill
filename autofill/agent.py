@@ -47,7 +47,11 @@ _PROVIDERS: dict[str, dict[str, str]] = {
 }
 
 _ACCENT = "#7851A9"
-_VERSION = "0.1.0"
+try:
+    from importlib.metadata import version as _pkg_version
+    _VERSION = _pkg_version("autofill")
+except Exception:
+    _VERSION = "unknown"
 
 _THEME = Theme(
     {"accent": _ACCENT, "success": "green", "info": "dim", "err": "bold red"}
@@ -353,8 +357,8 @@ def _onboard_api_key() -> None:
     key = _ask("Paste your API key (or Enter to skip)")
     if key:
         with open(_ENV_FILE, "a") as f:
-            f.write(f"export {info['env']}=\"{key}\"\n")
-            f.write(f'export AUTOFILL_PROVIDER="{provider}"\n')
+            f.write(f"{info['env']}={key}\n")
+            f.write(f"AUTOFILL_PROVIDER={provider}\n")
         _ENV_FILE.chmod(0o600)
         os.environ[info["env"]] = key
         os.environ["AUTOFILL_PROVIDER"] = provider
@@ -467,6 +471,13 @@ def cli() -> None:
             )
             console.print("Usage: [bold]autofill <form-url>[/]")
         return
+
+    from urllib.parse import urlparse
+    parsed = urlparse(args.command)
+    if parsed.scheme not in ("http", "https"):
+        raise SystemExit(
+            f"Invalid URL '{args.command}'. Please provide a URL starting with http:// or https://"
+        )
 
     console.print(f"\n  [accent]◉[/] [bold]autofill[/] [dim]v{_VERSION}[/]\n")
     provider = args.provider or _detect_provider() or "browseruse"
