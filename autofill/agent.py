@@ -110,10 +110,12 @@ def _read(path: Path) -> str:
         with pdfplumber.open(path) as pdf:
             for page in pdf.pages:
                 text = page.extract_text() or ""
+                remaining = _MAX_TEXT_CHARS - total
+                if len(text) >= remaining:
+                    parts.append(text[:remaining])
+                    break
                 parts.append(text)
                 total += len(text)
-                if total >= _MAX_TEXT_CHARS:
-                    break
         return "\n".join(parts)
     text = path.read_text()
     return text[:_MAX_TEXT_CHARS]
@@ -145,7 +147,7 @@ def _chunk_text(text: str) -> list[str]:
         chunk = text[start:end].strip()
         if chunk:
             chunks.append(chunk)
-        start = end - _CHUNK_OVERLAP if end < len(text) else end
+        start = max(0, end - _CHUNK_OVERLAP) if end < len(text) else end
     return chunks
 
 
@@ -191,12 +193,13 @@ def ingest() -> None:
         for fname, path in to_ingest.items():
             progress.update(task_id, description=f"Indexing [bold]{fname}[/]")
             h = hashes[fname]
-            if fname in stored_ids:
-                col.delete(ids=stored_ids[fname])
             chunks = _chunk_text(_read(path))
             if not chunks:
+                console.print(f"[yellow]Warning:[/] [bold]{fname}[/] produced no text chunks — skipping.")
                 progress.advance(task_id)
                 continue
+            if fname in stored_ids:
+                col.delete(ids=stored_ids[fname])
             for i in range(0, len(chunks), _UPSERT_BATCH):
                 batch = chunks[i : i + _UPSERT_BATCH]
                 col.upsert(
