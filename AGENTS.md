@@ -28,8 +28,8 @@ Dev shortcut: `uv run autofill …` also works.
 
 ## Architecture notes
 
-- **Ingest:** Non-hidden files in `knowledge/` only; chunking = split on blank lines (`\n\n`). PDFs via `pdfplumber`.
-- **Retrieve:** `retrieve("contact identity address work experience", n=5)` — single query, **not** full-document paste. Changing `n` or the query changes what reaches the task prompt.
+- **Ingest:** Non-hidden files in `knowledge/` only; chunking tries four separators in order (`\n\n`, `\n`, `". "`, `" "`) to find a clean break point within `cfg.chunk_size` chars, with `cfg.chunk_overlap` overlap between consecutive chunks. PDFs via `pdfplumber`.
+- **Retrieve:** `retrieve(cfg.retrieval_query, n=cfg.retrieval_n)` — single query, **not** full-document paste. Both the query string and *n* live in the `Config` dataclass at the top of `agent.py`.
 - **Empty profile:** If nothing is indexed, `_onboard()` runs interactively. If still empty after onboarding, exits with `SystemExit` (no silent fabrication).
 - **browser-use:** `BrowserProfile(keep_alive=True, headless=False)`, `bu.Agent(task=..., llm=...)`. Upstream behavior and APIs: [browser-use](https://github.com/browser-use/browser-use).
 
