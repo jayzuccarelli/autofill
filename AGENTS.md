@@ -50,3 +50,15 @@ uv run pytest tests/
 ## Claude Code
 
 See [`CLAUDE.md`](CLAUDE.md) for the short pointer used by Claude Code.
+
+## Cursor Cloud specific instructions
+
+- **uv** must be on PATH. It is installed at `~/.local/bin/uv`; ensure `export PATH="$HOME/.local/bin:$PATH"` is set.
+- After pulling, run `uv sync --extra dev` from the repo root to install/update all dependencies.
+- All commands (`ruff`, `mypy`, `pytest`, `autofill`) must be run from the **repository root** because paths in `agent.py` are cwd-relative (e.g. `Path("knowledge")`).
+- **ChromaDB** runs embedded (in-process); no external database server is needed. First run downloads the ONNX embedding model (~79 MB) to `~/.cache/chroma/`.
+- **Google Chrome** is pre-installed. The agent uses `headless=False` by default, so a display (Xvfb or similar) is needed in headless Cloud VMs.
+- **Lint/type-check have pre-existing warnings** in upstream code (E501 line-length in ruff, `var-annotated`/`name-defined` in mypy). These are not regressions.
+- **No tests exist yet** (`tests/` contains only `.gitkeep`); `pytest` exits with code 5 (no tests collected) — this is expected.
+- To exercise core logic without an LLM key: `cp knowledge/profile.example.md knowledge/profile.md`, then `uv run python -c "from autofill.agent import ingest, retrieve; ingest(); print(retrieve('contact identity'))"`. Clean up with `rm -f knowledge/profile.md && rm -rf knowledge/.db`.
+- The interactive onboarding (`questionary` prompts) blocks on TTY input. For non-interactive testing, create `knowledge/profile.md` and `.env` manually.
