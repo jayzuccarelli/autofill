@@ -19,10 +19,16 @@ install_uv() {
 }
 
 link_binary() {
-  local target="$1/bin/autofill"
+  local project_dir="$1"
   local link_dir="${HOME}/.local/bin"
   mkdir -p "$link_dir"
-  ln -sf "$target" "$link_dir/autofill"
+
+  # Create a small wrapper that invokes autofill via uv run
+  cat > "$link_dir/autofill" <<WRAPPER
+#!/usr/bin/env bash
+exec uv run --project "$project_dir" autofill "\$@"
+WRAPPER
+  chmod +x "$link_dir/autofill"
 
   # Ensure ~/.local/bin is on PATH in the user's shell rc
   local current_shell
