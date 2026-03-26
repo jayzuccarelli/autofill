@@ -5,7 +5,7 @@ Instructions for coding agents (Cursor, Copilot, Devin, etc.) working on **autof
 ## What this repo is
 
 - **autofill** ingests markdown/PDF under `knowledge/`, stores chunks in **Chroma** (`knowledge/.db/`), retrieves top‑k chunks with a fixed query, and passes them into a **[browser-use](https://github.com/browser-use/browser-use)** `Agent` task so a browser fills a form. The user reviews and submits manually (submit is never clicked by design).
-- **Single implementation file:** [`autofill/agent.py`](autofill/agent.py) — `ingest`, `retrieve`, `_llm`, `main`, `cli`, `_onboard*`. Entry: `bin/autofill` wrapper → `cli()`.
+- **Single implementation file:** [`autofill/agent.py`](autofill/agent.py) — `ingest`, `retrieve`, `_llm`, `main`, `cli`, `_onboard*`. Entry point: `[project.scripts]` in `pyproject.toml` → `cli()`. Invoke with `uv run autofill <url>`.
 - **Onboarding:** `cli()` checks for profile content + API key on every run. If missing, interactive prompts walk the user through setup (profile questions, key, optional files, then `ingest()`).
 - **Paths are cwd-relative:** `Path("knowledge")` — commands must run from **repository root**.
 
@@ -28,8 +28,8 @@ Dev shortcut: `uv run autofill …` also works.
 
 ## Architecture notes
 
-- **Ingest:** Non-hidden files in `knowledge/` only; chunking = split on blank lines (`\n\n`). PDFs via `pdfplumber`.
-- **Retrieve:** `retrieve("contact identity address work experience", n=5)` — single query, **not** full-document paste. Changing `n` or the query changes what reaches the task prompt.
+- **Ingest:** Non-hidden files in `knowledge/` only; chunking tries four separators in order (`\n\n`, `\n`, `". "`, `" "`) to find a clean break point within `cfg.chunk_size` chars, with `cfg.chunk_overlap` overlap between consecutive chunks. PDFs via `pdfplumber`.
+- **Retrieve:** `retrieve(cfg.retrieval_query, n=cfg.retrieval_n)` — single query, **not** full-document paste. Both the query string and *n* live in the `Config` dataclass at the top of `agent.py`.
 - **Empty profile:** If nothing is indexed, `_onboard()` runs interactively. If still empty after onboarding, exits with `SystemExit` (no silent fabrication).
 - **browser-use:** `BrowserProfile(keep_alive=True, headless=False)`, `bu.Agent(task=..., llm=...)`. Upstream behavior and APIs: [browser-use](https://github.com/browser-use/browser-use).
 
