@@ -3,6 +3,7 @@
 import asyncio
 import hashlib
 import os
+from dataclasses import dataclass
 from pathlib import Path
 
 import browser_use as bu
@@ -21,12 +22,37 @@ from rich.progress import (
 from rich.rule import Rule
 from rich.theme import Theme
 
-_KNOWLEDGE_DIR = Path("knowledge")
-_DB_PATH = _KNOWLEDGE_DIR / ".db"
-_COLLECTION = "profile"
-_PROFILE_EXAMPLE = _KNOWLEDGE_DIR / "profile.example.md"
-_PROFILE = _KNOWLEDGE_DIR / "profile.md"
-_ENV_FILE = Path(".env")
+@dataclass(frozen=True)
+class Config:
+    """Central configuration — paths, chunking params, model IDs, and timeouts."""
+
+    # Paths
+    knowledge_dir: Path = Path("knowledge")
+    db_path: Path = Path("knowledge/.db")
+    collection: str = "profile"
+    profile_example: Path = Path("knowledge/profile.example.md")
+    profile: Path = Path("knowledge/profile.md")
+    env_file: Path = Path(".env")
+
+    # Chunking
+    chunk_size: int = 1000
+    chunk_overlap: int = 200
+    upsert_batch: int = 50
+    max_text_chars: int = 100_000
+
+    # Retrieval
+    retrieval_query: str = "contact identity address work experience"
+    retrieval_n: int = 10
+
+    # Models — bump these when upgrading provider SDKs
+    anthropic_model: str = "claude-sonnet-4-20250514"  # Anthropic Sonnet
+    openai_model: str = "gpt-4o"                       # OpenAI GPT-4o
+
+    # Agent
+    agent_timeout: int = 600  # seconds before agent.run() is cancelled
+
+
+cfg = Config()
 
 _PROVIDERS: dict[str, dict[str, str]] = {
     "browseruse": {
@@ -47,7 +73,11 @@ _PROVIDERS: dict[str, dict[str, str]] = {
 }
 
 _ACCENT = "#7851A9"
-_VERSION = "0.1.0"
+try:
+    from importlib.metadata import version as _pkg_version
+    _VERSION = _pkg_version("autofill")
+except Exception:
+    _VERSION = "unknown"
 
 _THEME = Theme(
     {"accent": _ACCENT, "success": "green", "info": "dim", "err": "bold red"}
@@ -91,14 +121,13 @@ def _has_any_api_key() -> bool:
 
 
 def _client() -> chromadb.ClientAPI:
-    _DB_PATH.mkdir(parents=True, exist_ok=True)
-    return chromadb.PersistentClient(path=str(_DB_PATH))
-
-
-_MAX_TEXT_CHARS = 100_000
+    """Return a persistent Chroma client, creating the DB directory if needed."""
+    cfg.db_path.mkdir(parents=True, exist_ok=True)
+    return chromadb.PersistentClient(path=str(cfg.db_path))
 
 
 def _read(path: Path) -> str:
+    """Read a file's text content, truncating to ``cfg.max_text_chars``."""
     if path.suffix == ".pdf":
         import pdfplumber
         parts: list[str] = []
@@ -106,33 +135,35 @@ def _read(path: Path) -> str:
         with pdfplumber.open(path) as pdf:
             for page in pdf.pages:
                 text = page.extract_text() or ""
+                remaining = cfg.max_text_chars - total
+                if len(text) >= remaining:
+                    parts.append(text[:remaining])
+                    break
                 parts.append(text)
                 total += len(text)
-                if total >= _MAX_TEXT_CHARS:
-                    break
         return "\n".join(parts)
     text = path.read_text()
-    return text[:_MAX_TEXT_CHARS]
+    return text[:cfg.max_text_chars]
 
 
 def _hash(path: Path) -> str:
+    """Return the MD5 hex digest of a file's raw bytes."""
     return hashlib.md5(path.read_bytes()).hexdigest()
 
 
-_CHUNK_SIZE = 1000
-_CHUNK_OVERLAP = 200
-_UPSERT_BATCH = 50
-
-
 def _chunk_text(text: str) -> list[str]:
-    """Split text into chunks of ~_CHUNK_SIZE chars, preferring paragraph/sentence boundaries."""
+    """Split *text* into chunks of ~``cfg.chunk_size`` chars.
+
+    Tries to break on paragraph, line, sentence, then word boundaries
+    (in that order) so chunks stay semantically coherent.  Consecutive
+    chunks overlap by ``cfg.chunk_overlap`` characters.
+    """
     separators = ["\n\n", "\n", ". ", " "]
     chunks: list[str] = []
     start = 0
     while start < len(text):
-        end = min(start + _CHUNK_SIZE, len(text))
+        end = min(start + cfg.chunk_size, len(text))
         if end < len(text):
-            # Try each separator to find a clean break point
             for sep in separators:
                 pos = text.rfind(sep, start, end)
                 if pos > start:
@@ -141,12 +172,13 @@ def _chunk_text(text: str) -> list[str]:
         chunk = text[start:end].strip()
         if chunk:
             chunks.append(chunk)
-        start = end - _CHUNK_OVERLAP if end < len(text) else end
+        start = max(0, end - cfg.chunk_overlap) if end < len(text) else end
     return chunks
 
 
 def ingest() -> None:
-    col = _client().get_or_create_collection(_COLLECTION)
+    """Index all non-hidden files in the knowledge directory into Chroma."""
+    col = _client().get_or_create_collection(cfg.collection)
 
     # Build stored state: {filename: hash} and {filename: [ids]}
     stored = col.get(include=["metadatas"])
@@ -160,7 +192,7 @@ def ingest() -> None:
 
     current_files = {
         path.name: path
-        for path in sorted(_KNOWLEDGE_DIR.iterdir())
+        for path in sorted(cfg.knowledge_dir.iterdir())
         if not path.name.startswith(".")
         and path.is_file()
         and path.name != "profile.example.md"
@@ -187,14 +219,15 @@ def ingest() -> None:
         for fname, path in to_ingest.items():
             progress.update(task_id, description=f"Indexing [bold]{fname}[/]")
             h = hashes[fname]
-            if fname in stored_ids:
-                col.delete(ids=stored_ids[fname])
             chunks = _chunk_text(_read(path))
             if not chunks:
+                console.print(f"[yellow]Warning:[/] [bold]{fname}[/] produced no text chunks — skipping.")
                 progress.advance(task_id)
                 continue
-            for i in range(0, len(chunks), _UPSERT_BATCH):
-                batch = chunks[i : i + _UPSERT_BATCH]
+            if fname in stored_ids:
+                col.delete(ids=stored_ids[fname])
+            for i in range(0, len(chunks), cfg.upsert_batch):
+                batch = chunks[i : i + cfg.upsert_batch]
                 col.upsert(
                     ids=[f"{fname}:{i + j}" for j in range(len(batch))],
                     documents=batch,
@@ -203,28 +236,31 @@ def ingest() -> None:
             progress.advance(task_id)
 
 
-def retrieve(query: str, n: int = 10) -> str:
-    col = _client().get_or_create_collection(_COLLECTION)
+def retrieve(query: str, n: int = cfg.retrieval_n) -> str:
+    """Query the Chroma collection and return the top-*n* chunks joined by blank lines."""
+    col = _client().get_or_create_collection(cfg.collection)
     results = col.query(query_texts=[query], n_results=n)
     docs: list[str] = results["documents"][0]  # type: ignore[index]
     return "\n\n".join(docs)
 
 
 def _llm(provider: str) -> object:
+    """Instantiate the chat model for the given *provider* name."""
     if provider == "anthropic":
         from browser_use.llm.anthropic.chat import ChatAnthropic
-        return ChatAnthropic(model="claude-sonnet-4-20250514")
+        return ChatAnthropic(model=cfg.anthropic_model)
     if provider == "openai":
         from browser_use.llm.openai.chat import ChatOpenAI
-        return ChatOpenAI(model="gpt-4o")
+        return ChatOpenAI(model=cfg.openai_model)
     if provider == "browseruse":
         return bu.ChatBrowserUse()
     raise ValueError(f"Unknown provider '{provider}'. Choose: anthropic, openai, browseruse")
 
 
 async def main(url: str, provider: str) -> None:
+    """Ingest knowledge, build the task prompt, and run the browser agent."""
     ingest()
-    profile = retrieve("contact identity address work experience")
+    profile = retrieve(cfg.retrieval_query)
     if not profile.strip():
         raise SystemExit(
             "No profile in the knowledge store. Add one or more files under knowledge/ "
@@ -249,7 +285,14 @@ Rules:
     llm = _llm(provider)
     browser_profile = bu.BrowserProfile(keep_alive=True, headless=False)
     agent = bu.Agent(task=task, llm=llm, browser_profile=browser_profile)
-    await agent.run()
+    try:
+        async with asyncio.timeout(cfg.agent_timeout):
+            await agent.run()
+    except TimeoutError:
+        console.print(
+            f"\n[err]Agent timed out after {cfg.agent_timeout}s.[/] "
+            "The browser is still open — you can continue manually.",
+        )
     console.print(
         "\n[success]✓[/] Browser left open — review and submit in the window."
     )
@@ -260,9 +303,9 @@ Rules:
 
 def _has_profile_content() -> bool:
     """True if knowledge/ has at least one non-hidden, non-example file with real content."""
-    if not _KNOWLEDGE_DIR.is_dir():
+    if not cfg.knowledge_dir.is_dir():
         return False
-    for p in sorted(_KNOWLEDGE_DIR.iterdir()):
+    for p in sorted(cfg.knowledge_dir.iterdir()):
         if p.name.startswith(".") or not p.is_file():
             continue
         if p.name == "profile.example.md":
@@ -273,6 +316,7 @@ def _has_profile_content() -> bool:
 
 
 def _ask(prompt: str, default: str = "") -> str:
+    """Show an interactive text prompt and return the stripped answer (or *default*)."""
     try:
         val = questionary.text(prompt, style=_Q_STYLE).ask()
     except (EOFError, KeyboardInterrupt):
@@ -320,9 +364,9 @@ def _onboard_profile() -> None:
         lines.append(f"- **About:** {summary}")
     lines.append("")
 
-    _KNOWLEDGE_DIR.mkdir(parents=True, exist_ok=True)
-    _PROFILE.write_text("\n".join(lines))
-    console.print(f"\n[success]✓[/] Saved to [bold]{_PROFILE}[/]")
+    cfg.knowledge_dir.mkdir(parents=True, exist_ok=True)
+    cfg.profile.write_text("\n".join(lines))
+    console.print(f"\n[success]✓[/] Saved to [bold]{cfg.profile}[/]")
     console.print(
         "  Drop extra files (PDF, markdown, text) into knowledge/ any time.\n",
         style="info",
@@ -352,10 +396,10 @@ def _onboard_api_key() -> None:
 
     key = _ask("Paste your API key (or Enter to skip)")
     if key:
-        with open(_ENV_FILE, "a") as f:
-            f.write(f"export {info['env']}=\"{key}\"\n")
-            f.write(f'export AUTOFILL_PROVIDER="{provider}"\n')
-        _ENV_FILE.chmod(0o600)
+        with open(cfg.env_file, "a") as f:
+            f.write(f"{info['env']}={key}\n")
+            f.write(f"AUTOFILL_PROVIDER={provider}\n")
+        cfg.env_file.chmod(0o600)
         os.environ[info["env"]] = key
         os.environ["AUTOFILL_PROVIDER"] = provider
         console.print("[success]✓[/] Saved to .env\n")
@@ -373,7 +417,7 @@ def _onboard_files() -> None:
         "Add files to knowledge/ now?", default=False, style=_Q_STYLE
     ).ask()
     if add:
-        console.print(f"  Drop files into: [bold]{_KNOWLEDGE_DIR.resolve()}[/]")
+        console.print(f"  Drop files into: [bold]{cfg.knowledge_dir.resolve()}[/]")
         _ask("Press Enter when done…")
     console.print()
 
@@ -399,7 +443,7 @@ def _onboard() -> None:
         )
     _onboard_files()
     ingest()
-    profile = retrieve("contact identity address work experience")
+    profile = retrieve(cfg.retrieval_query)
     if not profile.strip():
         raise SystemExit(
             "No profile content found after indexing. "
@@ -467,6 +511,13 @@ def cli() -> None:
             )
             console.print("Usage: [bold]autofill <form-url>[/]")
         return
+
+    from urllib.parse import urlparse
+    parsed = urlparse(args.command)
+    if parsed.scheme not in ("http", "https"):
+        raise SystemExit(
+            f"Invalid URL '{args.command}'. Please provide a URL starting with http:// or https://"
+        )
 
     console.print(f"\n  [accent]◉[/] [bold]autofill[/] [dim]v{_VERSION}[/]\n")
     provider = args.provider or _detect_provider() or "browseruse"
