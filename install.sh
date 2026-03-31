@@ -60,9 +60,9 @@ if [[ -n "$_script" && "$_script" != "-" ]]; then
     link_binary "$SCRIPT_DIR"
     echo ""
     if [[ ":$PATH:" == *":$HOME/.local/bin:"* ]]; then
-      printf '✓ autofill installed.\n\n  Run: \033[1;32mautofill\033[0m\n'
+      printf '✓ autofill installed.\n\n  Run: \033[1;38;2;120;81;169mautofill\033[0m\n'
     else
-      printf '✓ autofill installed.\n\n  Run: \033[1;32mexec $SHELL && autofill\033[0m\n'
+      printf '✓ autofill installed.\n\n  Run: \033[1;38;2;120;81;169mexec $SHELL && autofill\033[0m\n'
     fi
     exit 0
   fi
@@ -96,7 +96,7 @@ link_binary "$INSTALL_DIR"
 
 echo ""
 if [[ ":$PATH:" == *":$HOME/.local/bin:"* ]]; then
-  printf '✓ autofill installed.\n\n  Run: \033[1;32mautofill\033[0m\n'
+  printf '✓ autofill installed.\n\n  Run: \033[1;38;2;120;81;169mautofill\033[0m\n'
 else
-  printf '✓ autofill installed.\n\n  Run: \033[1;32mexec $SHELL && autofill\033[0m\n'
+  printf '✓ autofill installed.\n\n  Run: \033[1;38;2;120;81;169mexec $SHELL && autofill\033[0m\n'
 fi
