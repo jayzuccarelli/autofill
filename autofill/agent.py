@@ -474,7 +474,7 @@ def _uninstall() -> None:
         symlink.unlink()
 
     shutil.rmtree(repo_root)
-    console.print("[success]✓[/] autofill uninstalled.")
+    print("\u2713 autofill uninstalled.")
 
 
 def cli() -> None:
