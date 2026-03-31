@@ -11,7 +11,6 @@ import chromadb
 import questionary
 from dotenv import load_dotenv
 from rich.console import Console
-from rich.panel import Panel
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -20,6 +19,8 @@ from rich.progress import (
     TextColumn,
 )
 from rich.rule import Rule
+from rich.table import Table
+from rich.text import Text
 from rich.theme import Theme
 
 @dataclass(frozen=True)
@@ -95,14 +96,35 @@ _Q_STYLE = questionary.Style(
     ]
 )
 
-_LOGO = """\
-    ,'""`.
-   / _  _ \\
-   |(◉)(◉)|
-   )  __  (
-  /,'))((`\\
- (( ((  )) ))
-  `\\ `)(' /'"""
+_LOGO_LINES = [
+    "  [rgb(188,167,202) on rgb(162,132,185)]▀[/][rgb(140,102,170) on rgb(113,67,149)]▀[/][rgb(140,102,170) on rgb(113,67,149)]▀[/][rgb(140,102,170) on rgb(113,67,149)]▀[/][rgb(140,102,170) on rgb(113,67,149)]▀[/][rgb(140,102,170) on rgb(113,67,149)]▀[/][rgb(140,102,170) on rgb(113,67,149)]▀[/][rgb(140,102,170) on rgb(113,67,149)]▀[/][rgb(140,102,170) on rgb(113,67,149)]▀[/][rgb(188,167,202) on rgb(162,132,185)]▀[/]",
+    "  [rgb(162,132,185)]█[/][rgb(113,67,149)]█[/][rgb(55,33,72) on rgb(113,67,149)]▀[/][rgb(113,67,149)]█[/][rgb(140,102,170) on rgb(113,67,149)]▀[/][rgb(140,102,170) on rgb(113,67,149)]▀[/][rgb(113,67,149)]█[/][rgb(55,33,72) on rgb(113,67,149)]▀[/][rgb(113,67,149)]█[/][rgb(162,132,185)]█[/]",
+    "  [rgb(162,132,185)]█[/][rgb(113,67,149)]█[/][rgb(140,102,170) on rgb(113,67,149)]▀[/][rgb(140,102,170) on rgb(113,67,149)]▀[/][rgb(113,67,149)]█[/][rgb(113,67,149)]█[/][rgb(113,67,149)]█[/][rgb(140,102,170) on rgb(113,67,149)]▀[/][rgb(113,67,149)]█[/][rgb(162,132,185)]█[/]",
+    "[rgb(140,102,170)]▄[/][rgb(188,167,202) on rgb(113,67,149)]▀[/][rgb(113,67,149) on rgb(162,132,185)]▀[/][rgb(140,102,170) on rgb(162,132,185)]▀[/][rgb(140,102,170)]█[/][rgb(140,102,170) on rgb(162,132,185)]▀[/][rgb(140,102,170) on rgb(162,132,185)]▀[/][rgb(140,102,170) on rgb(162,132,185)]▀[/][rgb(140,102,170) on rgb(162,132,185)]▀[/][rgb(140,102,170)]█[/][rgb(140,102,170) on rgb(162,132,185)]▀[/][rgb(113,67,149) on rgb(162,132,185)]▀[/][rgb(188,167,202) on rgb(113,67,149)]▀[/][rgb(140,102,170)]▄[/]",
+    "[rgb(188,167,202)]▀[/][rgb(188,167,202)]█[/][rgb(188,167,202) on rgb(113,67,149)]▀[/][rgb(140,102,170)]█[/][rgb(162,132,185)]▀[/][rgb(162,132,185) on rgb(140,102,170)]▀[/][rgb(162,132,185)]█[/][rgb(162,132,185)]█[/][rgb(162,132,185) on rgb(140,102,170)]▀[/][rgb(162,132,185)]▀[/][rgb(140,102,170)]█[/][rgb(188,167,202) on rgb(113,67,149)]▀[/][rgb(188,167,202)]█[/][rgb(188,167,202)]▀[/]",
+    "   [rgb(188,167,202)]▄[/][rgb(162,132,185) on rgb(113,67,149)]▀[/][rgb(113,67,149) on rgb(162,132,185)]▀[/][rgb(188,167,202)]▀[/][rgb(188,167,202)]▀[/][rgb(113,67,149) on rgb(188,167,202)]▀[/][rgb(162,132,185) on rgb(113,67,149)]▀[/][rgb(188,167,202)]▄[/]",
+]
+
+
+def _banner(*info_lines: str) -> Table:
+    """Build a Claude-Code-style banner: pixel-art logo left, info text right."""
+    logo = Text()
+    for i, line in enumerate(_LOGO_LINES):
+        if i:
+            logo.append("\n")
+        logo.append_text(Text.from_markup(line))
+
+    info = Text()
+    for i, line in enumerate(info_lines):
+        if i:
+            info.append("\n")
+        info.append_text(Text.from_markup(line))
+
+    table = Table(show_header=False, show_edge=False, box=None, padding=(0, 2))
+    table.add_column(no_wrap=True)
+    table.add_column(no_wrap=True)
+    table.add_row(logo, info)
+    return table
 
 
 def _detect_provider() -> str | None:
@@ -425,14 +447,12 @@ def _onboard_files() -> None:
 def _onboard() -> None:
     """Run the full first-time setup: profile, API key, extra files, then ingest."""
     console.print()
-    console.print(
-        Panel(
-            f"[accent]{_LOGO}[/]\n\n  [bold]autofill[/]  [dim]v{_VERSION}[/]",
-            border_style="accent",
-            padding=(1, 2),
-        )
-    )
-    console.print("  Welcome! Let's get you set up.\n")
+    console.print(_banner(
+        f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
+        "",
+        "Welcome! Let's get you set up.",
+    ))
+    console.print()
 
     _onboard_profile()
     _onboard_api_key()
@@ -506,10 +526,12 @@ def cli() -> None:
                 "Setup complete. Next: [bold]autofill <form-url>[/]"
             )
         else:
-            console.print(
-                f"[accent]◉[/] [bold]autofill[/] [dim]v{_VERSION}[/]"
-            )
-            console.print("Usage: [bold]autofill <form-url>[/]")
+            console.print()
+            console.print(_banner(
+                f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
+                "",
+                "Usage: [bold]autofill <form-url>[/]",
+            ))
         return
 
     from urllib.parse import urlparse
@@ -519,7 +541,9 @@ def cli() -> None:
             f"Invalid URL '{args.command}'. Please provide a URL starting with http:// or https://"
         )
 
-    console.print(f"\n  [accent]◉[/] [bold]autofill[/] [dim]v{_VERSION}[/]\n")
+    console.print()
+    console.print(_banner(f"[bold]autofill[/]  [dim]v{_VERSION}[/]"))
+    console.print()
     provider = args.provider or _detect_provider() or "browseruse"
     ingest()
     asyncio.run(main(args.command, provider))
