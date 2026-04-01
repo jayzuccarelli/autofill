@@ -1,7 +1,3 @@
-<p align="center">
-  <img src="assets/logo.png" width="160" alt="autofill logo">
-</p>
-
 # autofill
 
 AI-powered form autofill: describe yourself once, then point it at any web form and it fills every field for you. You review and submit manually.
