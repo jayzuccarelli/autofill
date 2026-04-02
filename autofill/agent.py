@@ -33,6 +33,7 @@ class Config:
     collection: str = "profile"
     profile_example: Path = Path("knowledge/profile.example.md")
     profile: Path = Path("knowledge/profile.md")
+    corrections: Path = Path("knowledge/corrections.md")
     env_file: Path = Path(".env")
 
     # Chunking
@@ -279,6 +280,55 @@ def _llm(provider: str) -> object:
     raise ValueError(f"Unknown provider '{provider}'. Choose: anthropic, openai, browseruse")
 
 
+def _load_corrections() -> str:
+    """Load accumulated user corrections from the corrections file, if any."""
+    if cfg.corrections.is_file() and cfg.corrections.stat().st_size > 0:
+        return cfg.corrections.read_text().strip()
+    return ""
+
+
+def _collect_corrections() -> None:
+    """Ask the user if they made edits and record corrections for future runs."""
+    console.print()
+    made_edits = questionary.confirm(
+        "Did you make any corrections to what the agent filled?",
+        default=False,
+        style=_Q_STYLE,
+    ).ask()
+    if not made_edits:
+        return
+
+    console.print(
+        "  Describe what you changed so the agent learns for next time.\n"
+        "  (e.g. \"Use +1 country code for phone\", \"Pick 'Senior' not 'Mid-level'\")\n"
+        "  Enter a blank line when done.\n",
+        style="info",
+    )
+    corrections: list[str] = []
+    while True:
+        line = _ask("  Correction (or Enter to finish)")
+        if not line:
+            break
+        corrections.append(f"- {line}")
+
+    if not corrections:
+        return
+
+    header = "# Corrections\n\nLearned preferences from past form fills.\n\n"
+    new_entries = "\n".join(corrections) + "\n"
+
+    if cfg.corrections.is_file() and cfg.corrections.stat().st_size > 0:
+        existing = cfg.corrections.read_text()
+        cfg.corrections.write_text(existing.rstrip() + "\n" + new_entries)
+    else:
+        cfg.corrections.write_text(header + new_entries)
+
+    console.print(
+        f"[success]✓[/] Saved {len(corrections)} correction(s) to [bold]{cfg.corrections}[/] "
+        "— the agent will apply them next time.",
+    )
+
+
 async def main(url: str, provider: str) -> None:
     """Ingest knowledge, build the task prompt, and run the browser agent."""
     ingest()
@@ -289,12 +339,21 @@ async def main(url: str, provider: str) -> None:
             "(e.g. knowledge/profile.md — see README), run from the project root, then try again."
         )
 
+    corrections = _load_corrections()
+    corrections_block = ""
+    if corrections:
+        corrections_block = f"""
+
+Past corrections from the user (apply these lessons — they override defaults):
+{corrections}
+"""
+
     task = f"""
 Open {url} and fill every applicable field using the profile below (map labels
 loosely — e.g. "Phone" = telephone):
 
 {profile}
-
+{corrections_block}
 Rules:
 - Prefer selects and radios that match the values above; otherwise choose the closest reasonable option.
 - Try to answer all the questions; if unsure, make a reasonable guess.
@@ -319,8 +378,9 @@ Rules:
         "\n[success]✓[/] Browser left open — review and submit in the window."
     )
     await asyncio.to_thread(
-        input, "  Press Enter to exit when finished. "
+        input, "  Press Enter after you've reviewed (and edited) the form. "
     )
+    _collect_corrections()
 
 
 def _has_profile_content() -> bool:
