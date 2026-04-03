@@ -315,6 +315,7 @@ Rules:
             f"\n[err]Agent timed out after {cfg.agent_timeout}s.[/] "
             "The browser is still open — you can continue manually.",
         )
+    print("\a", end="", flush=True)
     console.print(
         "\n[success]✓[/] Browser left open — review and submit in the window."
     )
