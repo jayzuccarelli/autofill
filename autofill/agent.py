@@ -306,7 +306,12 @@ Rules:
 
     llm = _llm(provider)
     browser_profile = bu.BrowserProfile(keep_alive=True, headless=False)
-    agent = bu.Agent(task=task, llm=llm, browser_profile=browser_profile)
+    agent = bu.Agent(
+        task=task,
+        llm=llm,
+        browser_profile=browser_profile,
+        initial_actions=[{"go_to_url": {"url": url}}],
+    )
     try:
         async with asyncio.timeout(cfg.agent_timeout):
             await agent.run()
