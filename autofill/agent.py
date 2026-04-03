@@ -505,6 +505,7 @@ def _uninstall() -> None:
 
 
 def cli() -> None:
+    os.chdir(Path(__file__).resolve().parent.parent)
     load_dotenv()
     import argparse
     parser = argparse.ArgumentParser(description="AI-powered form autofill")
