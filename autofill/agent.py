@@ -55,6 +55,9 @@ class Config:
 
 cfg = Config()
 
+# Attachable document types (not .md/.txt — those are indexed as text, not file-input bytes).
+_ATTACHABLE_SUFFIXES = frozenset({".pdf", ".doc", ".docx"})
+
 _PROVIDERS: dict[str, dict[str, str]] = {
     "browseruse": {
         "env": "BROWSER_USE_API_KEY",
@@ -266,6 +269,27 @@ def retrieve(query: str, n: int = cfg.retrieval_n) -> str:
     return "\n\n".join(docs)
 
 
+def _attachment_paths() -> list[str]:
+    """Paths browser-use may pass to ``<input type="file">``.
+
+    Includes every PDF/DOC/DOCX in ``knowledge/`` (same visibility rules as ``ingest``).
+    There is **no** basename pattern or "resume" substring — only the suffix allowlist.
+    Which path belongs to which upload field is decided by the agent from **form labels**,
+    not from matching strings in filenames.
+    """
+    if not cfg.knowledge_dir.is_dir():
+        return []
+    paths: list[Path] = []
+    for path in sorted(cfg.knowledge_dir.iterdir()):
+        if path.name.startswith(".") or not path.is_file():
+            continue
+        if path.name == "profile.example.md":
+            continue
+        if path.suffix.lower() in _ATTACHABLE_SUFFIXES:
+            paths.append(path.resolve())
+    return [str(p) for p in paths]
+
+
 def _llm(provider: str) -> object:
     """Instantiate the chat model for the given *provider* name."""
     if provider == "anthropic":
@@ -289,6 +313,18 @@ async def main(url: str, provider: str) -> None:
             "(e.g. knowledge/profile.md — see README), run from the project root, then try again."
         )
 
+    attachments = _attachment_paths()
+    if attachments:
+        upload_rule = (
+            "- For each file upload, read the field label on the page; choose one path from "
+            f"this list that fits that label (CV vs cover letter vs other document): {attachments}.\n"
+            "- Do not upload passport/license/ID scans unless required; skip if unsure."
+        )
+    else:
+        upload_rule = (
+            "- Do not upload real identity documents; skip file uploads requiring real files."
+        )
+
     task = f"""
 Open {url} and fill every applicable field using the profile below (map labels
 loosely — e.g. "Phone" = telephone):
@@ -299,7 +335,7 @@ Rules:
 - Prefer selects and radios that match the values above; otherwise choose the closest reasonable option.
 - Try to answer all the questions; if unsure, make a reasonable guess.
 - For longer fields, write a few sentences consistent with the profile.
-- Do not upload real identity documents; skip file uploads requiring real files.
+{upload_rule}
 - Do not click Submit, Apply, Send, or any control that finalises the application.
 - When everything reasonable is filled, finish with the done action and tell the user to review and submit manually.
 """
@@ -311,6 +347,7 @@ Rules:
         llm=llm,
         browser_profile=browser_profile,
         initial_actions=[{"go_to_url": {"url": url}}],
+        available_file_paths=attachments or None,
     )
     try:
         async with asyncio.timeout(cfg.agent_timeout):
@@ -327,6 +364,13 @@ Rules:
     await asyncio.to_thread(
         input, "  Press Enter to exit when finished. "
     )
+    # keep_alive leaves CDP / reconnect tasks running; exiting asyncio.run() then
+    # destroys pending tasks (noisy errors). Tear down the session after review.
+    if agent.browser_session is not None:
+        try:
+            await agent.browser_session.kill()
+        except Exception:
+            pass
 
 
 def _has_profile_content() -> bool:
