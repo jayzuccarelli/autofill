@@ -26,7 +26,7 @@ link_binary() {
   # Create a small wrapper that invokes autofill via uv run
   cat > "$link_dir/autofill" <<WRAPPER
 #!/usr/bin/env bash
-exec uv run --project "$project_dir" autofill "\$@"
+cd "$project_dir" && exec uv run autofill "\$@"
 WRAPPER
   chmod +x "$link_dir/autofill"
 
