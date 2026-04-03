@@ -479,16 +479,13 @@ def _uninstall() -> None:
     repo_root = Path(__file__).resolve().parent.parent
     symlink = Path.home() / ".local" / "bin" / "autofill"
 
-    console.print(
-        f"This will delete [bold]{repo_root}[/] "
-        "(including your profile and knowledge files).",
-        style="err",
-    )
+    print(f"\033[1;31mThis will delete {repo_root}\033[0m "
+          "(including your profile and knowledge files).")
     confirm = questionary.confirm(
         "Are you sure?", default=False, style=_Q_STYLE
     ).ask()
     if not confirm:
-        console.print("Cancelled.")
+        print("Cancelled.")
         return
 
     if symlink.is_symlink():
