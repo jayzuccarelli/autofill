@@ -478,6 +478,15 @@ def _uninstall() -> None:
 
     repo_root = Path(__file__).resolve().parent.parent
     symlink = Path.home() / ".local" / "bin" / "autofill"
+    expected = Path.home() / "autofill"
+
+    if repo_root != expected:
+        raise SystemExit(
+            f"Refusing to uninstall: running from {repo_root}, "
+            f"but uninstall only targets {expected} (the install.sh location).\n"
+            "If you installed with install.sh, run the autofill from ~/.local/bin/autofill.\n"
+            "If this is a dev clone, just delete it manually."
+        )
 
     print(f"\033[1;31mThis will delete {repo_root}\033[0m "
           "(including your profile and knowledge files).")
