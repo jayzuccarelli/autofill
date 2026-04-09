@@ -8,6 +8,7 @@ from pathlib import Path
 
 import browser_use as bu
 import chromadb
+from autofill.telemetry import track
 import questionary
 from dotenv import load_dotenv
 from rich.console import Console
@@ -349,14 +350,19 @@ Rules:
         initial_actions=[{"go_to_url": {"url": url}}],
         available_file_paths=attachments or None,
     )
+    timed_out = False
     try:
         async with asyncio.timeout(cfg.agent_timeout):
             await agent.run()
     except TimeoutError:
+        timed_out = True
+        track("timeout", {"provider": provider})
         console.print(
             f"\n[err]Agent timed out after {cfg.agent_timeout}s.[/] "
             "The browser is still open — you can continue manually.",
         )
+    if not timed_out:
+        track("complete", {"provider": provider})
     print("\a", end="", flush=True)
     console.print(
         "\n[success]✓[/] Browser left open — review and submit in the window."
@@ -520,6 +526,7 @@ def _onboard() -> None:
             "Add info to knowledge/profile.md and run autofill again."
         )
     console.print("[success]✓[/] Done! You're all set.\n")
+    track("install")
 
 
 def _uninstall() -> None:
@@ -602,6 +609,7 @@ def cli() -> None:
     console.print(_banner(f"[bold]autofill[/]  [dim]v{_VERSION}[/]"))
     console.print()
     provider = args.provider or _detect_provider() or "browseruse"
+    track("run", {"provider": provider, "domain": parsed.netloc})
     ingest()
     asyncio.run(main(args.command, provider))
 
