@@ -429,34 +429,16 @@ Rules:
     # Snapshot what the agent filled, then poll for user edits until submit/navigate.
     agent_snapshot: dict = {}
     user_snapshot: dict = {}
-    poll_task: asyncio.Task | None = None
     if agent.browser_session is not None:
         try:
             page = await agent.browser_session.get_current_page()
             agent_snapshot = await _snapshot_fields(page)
             user_snapshot = dict(agent_snapshot)
-            poll_task = asyncio.create_task(_poll_fields(page, user_snapshot))
+            await _poll_fields(page, user_snapshot)
         except Exception:
             pass
 
     print("\a", end="", flush=True)
-    console.print(
-        "\n[success]✓[/] Browser left open — review and submit in the window."
-    )
-
-    enter_task: asyncio.Task = asyncio.create_task(
-        asyncio.to_thread(input, "  Press Enter to exit when finished. ")
-    )
-
-    wait_tasks = [enter_task]
-    if poll_task is not None:
-        wait_tasks.append(poll_task)
-
-    done, pending = await asyncio.wait(wait_tasks, return_when=asyncio.FIRST_COMPLETED)
-    for task in pending:
-        task.cancel()
-
-    submitted = poll_task is not None and poll_task in done
 
     corrections = {
         k: {"agent": agent_snapshot.get(k, ""), "user": v}
@@ -467,17 +449,7 @@ Rules:
         _save_corrections(url, corrections)
         console.print(f"[info]Saved {len(corrections)} correction(s) for next time.[/]")
 
-    if submitted:
-        # Page navigated — browser stays open (keep_alive=True), just exit.
-        console.print("[info]Submitted — browser stays open.[/]")
-        return
-
-    # User pressed Enter manually — tear down cleanly.
-    if agent.browser_session is not None:
-        try:
-            await agent.browser_session.kill()
-        except Exception:
-            pass
+    console.print("[info]Submitted — browser stays open.[/]")
 
 
 def _has_profile_content() -> bool:
