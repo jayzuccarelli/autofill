@@ -2,9 +2,12 @@
 
 import asyncio
 import hashlib
+import json
 import os
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
 
 import browser_use as bu
 import chromadb
@@ -48,6 +51,9 @@ class Config:
     # Models — bump these when upgrading provider SDKs
     anthropic_model: str = "claude-sonnet-4-20250514"  # Anthropic Sonnet
     openai_model: str = "gpt-4o"                       # OpenAI GPT-4o
+
+    # Corrections
+    corrections_file: Path = Path("knowledge/corrections.jsonl")
 
     # Agent
     agent_timeout: int = 600  # seconds before agent.run() is cancelled
@@ -303,6 +309,66 @@ def _llm(provider: str) -> object:
     raise ValueError(f"Unknown provider '{provider}'. Choose: anthropic, openai, browseruse")
 
 
+async def _snapshot_fields(page) -> dict:
+    """Read all visible form field values from the current page."""
+    try:
+        return await page.evaluate("""
+            () => Object.fromEntries(
+                Array.from(document.querySelectorAll('input, textarea, select'))
+                    .filter(el => (el.name || el.id) && !['hidden','submit','button','reset'].includes(el.type))
+                    .map(el => [el.name || el.id, el.value])
+            )
+        """)
+    except Exception:
+        return {}
+
+
+async def _poll_fields(page, snapshot: dict, interval: float = 0.5) -> None:
+    """Continuously update snapshot with current field values until page navigates."""
+    while True:
+        await asyncio.sleep(interval)
+        current = await _snapshot_fields(page)
+        if not current:
+            break
+        snapshot.update(current)
+
+
+def _load_corrections(url: str) -> str:
+    """Return previously saved corrections for this domain, formatted for the task prompt."""
+    if not cfg.corrections_file.exists():
+        return ""
+    domain = urlparse(url).netloc
+    entries = []
+    with open(cfg.corrections_file) as f:
+        for line in f:
+            try:
+                entry = json.loads(line)
+                if entry.get("domain") == domain:
+                    entries.append(entry)
+            except Exception:
+                continue
+    if not entries:
+        return ""
+    lines = [f"Previously corrected fields on {domain}:"]
+    for entry in entries[-5:]:
+        for field, change in entry["corrections"].items():
+            lines.append(f"- {field}: use '{change['user']}' (not '{change['agent']}')")
+    return "\n".join(lines)
+
+
+def _save_corrections(url: str, corrections: dict) -> None:
+    """Append field corrections to the corrections log."""
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "url": url,
+        "domain": urlparse(url).netloc,
+        "corrections": corrections,
+    }
+    cfg.corrections_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg.corrections_file, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
 async def main(url: str, provider: str) -> None:
     """Ingest knowledge, build the task prompt, and run the browser agent."""
     ingest()
@@ -325,12 +391,15 @@ async def main(url: str, provider: str) -> None:
             "- Do not upload real identity documents; skip file uploads requiring real files."
         )
 
+    prior_corrections = _load_corrections(url)
+    corrections_section = f"\n{prior_corrections}\n" if prior_corrections else ""
+
     task = f"""
 Open {url} and fill every applicable field using the profile below (map labels
 loosely — e.g. "Phone" = telephone):
 
 {profile}
-
+{corrections_section}
 Rules:
 - Prefer selects and radios that match the values above; otherwise choose the closest reasonable option.
 - Try to answer all the questions; if unsure, make a reasonable guess.
@@ -357,6 +426,19 @@ Rules:
             f"\n[err]Agent timed out after {cfg.agent_timeout}s.[/] "
             "The browser is still open — you can continue manually.",
         )
+    # Snapshot what the agent filled, then poll for user edits until submit/navigate.
+    agent_snapshot: dict = {}
+    user_snapshot: dict = {}
+    poll_task = None
+    if agent.browser_session is not None:
+        try:
+            page = await agent.browser_session.get_current_page()
+            agent_snapshot = await _snapshot_fields(page)
+            user_snapshot = dict(agent_snapshot)
+            poll_task = asyncio.create_task(_poll_fields(page, user_snapshot))
+        except Exception:
+            pass
+
     print("\a", end="", flush=True)
     console.print(
         "\n[success]✓[/] Browser left open — review and submit in the window."
@@ -364,6 +446,19 @@ Rules:
     await asyncio.to_thread(
         input, "  Press Enter to exit when finished. "
     )
+
+    if poll_task is not None:
+        poll_task.cancel()
+
+    corrections = {
+        k: {"agent": agent_snapshot.get(k, ""), "user": v}
+        for k, v in user_snapshot.items()
+        if agent_snapshot.get(k) != v and v
+    }
+    if corrections:
+        _save_corrections(url, corrections)
+        console.print(f"[info]Saved {len(corrections)} correction(s) for next time.[/]")
+
     # keep_alive leaves CDP / reconnect tasks running; exiting asyncio.run() then
     # destroys pending tasks (noisy errors). Tear down the session after review.
     if agent.browser_session is not None:
