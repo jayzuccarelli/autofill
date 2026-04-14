@@ -1,13 +1,17 @@
 """AI-powered form autofill: ingest local knowledge, retrieve context, fill form."""
 
 import asyncio
+import atexit
 import hashlib
 import json
 import os
+import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
+
+from posthog import Posthog
 
 import browser_use as bu
 import chromadb
@@ -93,6 +97,54 @@ _THEME = Theme(
     {"accent": _ACCENT, "success": "green", "info": "dim", "err": "bold red"}
 )
 console = Console(theme=_THEME)
+
+# ---------------------------------------------------------------------------
+# PostHog analytics helpers
+# ---------------------------------------------------------------------------
+
+_posthog_instance: Posthog | None = None
+
+
+def _get_install_id() -> str:
+    """Return a stable anonymous install ID, creating one if needed."""
+    id_file = Path(".autofill_install_id")
+    if id_file.exists():
+        return id_file.read_text().strip()
+    new_id = f"install_{uuid.uuid4().hex}"
+    try:
+        id_file.write_text(new_id)
+    except OSError:
+        pass
+    return new_id
+
+
+def _ph() -> Posthog | None:
+    """Return the module-level PostHog client, initialising on first call."""
+    global _posthog_instance
+    if _posthog_instance is None:
+        token = os.getenv("POSTHOG_PROJECT_TOKEN")
+        if token:
+            _posthog_instance = Posthog(
+                token,
+                host=os.getenv("POSTHOG_HOST", "https://us.i.posthog.com"),
+                enable_exception_autocapture=True,
+            )
+            atexit.register(_posthog_instance.shutdown)
+    return _posthog_instance
+
+
+def _capture(event: str, properties: dict | None = None) -> None:
+    """Capture a PostHog event if the client is configured."""
+    client = _ph()
+    if client:
+        client.capture(
+            distinct_id=_get_install_id(),
+            event=event,
+            properties=properties or {},
+        )
+
+
+# ---------------------------------------------------------------------------
 
 _Q_STYLE = questionary.Style(
     [
@@ -266,6 +318,8 @@ def ingest() -> None:
                 )
             progress.advance(task_id)
 
+    _capture("knowledge_ingested", {"file_count": len(to_ingest)})
+
 
 def retrieve(query: str, n: int = cfg.retrieval_n) -> str:
     """Query the Chroma collection and return the top-*n* chunks joined by blank lines."""
@@ -310,24 +364,80 @@ def _llm(provider: str) -> object:
 
 
 async def _snapshot_fields(page) -> dict:
-    """Read all visible form field values from the current page."""
+    """Read all visible form field values from the current page.
+
+    Keys prefer ``<label>`` text over ``name``/``id`` — labels are stable
+    across page reloads even when frameworks generate random IDs.
+    """
     try:
-        return await page.evaluate("""
-            () => Object.fromEntries(
-                Array.from(document.querySelectorAll('input, textarea, select'))
-                    .filter(el => (el.name || el.id) && !['hidden','submit','button','reset'].includes(el.type))
-                    .map(el => [el.name || el.id, el.value])
-            )
+        raw = await page.evaluate("""
+            () => {
+                const result = {};
+
+                // Helper: walk up from an element to find the question label.
+                function findLabel(el) {
+                    // 1. Standard <label> association.
+                    if (el.labels && el.labels.length) return el.labels[0].textContent.trim();
+                    if (el.id) {
+                        const ext = document.querySelector('label[for="' + el.id + '"]');
+                        if (ext) return ext.textContent.trim();
+                    }
+                    // 2. Walk up the DOM looking for a heading or label-like element.
+                    let node = el.parentElement;
+                    for (let i = 0; i < 10 && node; i++) {
+                        // role="heading" (Google Forms, Typeform, etc.)
+                        const h = node.querySelector('[role="heading"]');
+                        if (h) return h.textContent.trim();
+                        // data-params often contains the question text on Google Forms
+                        if (node.dataset && node.dataset.params) {
+                            try {
+                                const parts = JSON.parse(node.dataset.params.replace(/^%.@/, '['));
+                                if (typeof parts[1] === 'string' && parts[1]) return parts[1];
+                            } catch(e) {}
+                        }
+                        // Any actual heading tag
+                        const ht = node.querySelector('h1,h2,h3,h4,h5,h6');
+                        if (ht) return ht.textContent.trim();
+                        node = node.parentElement;
+                    }
+                    return '';
+                }
+
+                document.querySelectorAll('input, textarea, select').forEach(el => {
+                    if (!el.name && !el.id) return;
+                    if (['submit','button','reset'].includes(el.type)) return;
+                    // Skip sentinel fields (Google Forms duplicates).
+                    if (el.name && el.name.endsWith('_sentinel')) return;
+
+                    if (el.type === 'hidden') {
+                        if (/^entry\\./.test(el.name)) {
+                            const lbl = findLabel(el) || el.name;
+                            result[lbl] = el.value;
+                        }
+                    } else {
+                        const lbl = findLabel(el) || el.name || el.id;
+                        result[lbl] = el.value;
+                    }
+                });
+
+                return JSON.stringify(result);
+            }
         """)
+        return json.loads(raw) if raw else {}
     except Exception:
         return {}
 
 
-async def _poll_fields(page, snapshot: dict, interval: float = 0.5) -> None:
-    """Continuously update snapshot with current field values until page navigates."""
-    while True:
+async def _poll_fields(page, snapshot: dict, interval: float = 0.5,
+                       timeout: float = 600) -> None:
+    """Continuously update snapshot with current field values until page navigates or *timeout*."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
         await asyncio.sleep(interval)
-        current = await _snapshot_fields(page)
+        try:
+            current = await _snapshot_fields(page)
+        except Exception:
+            break
         if not current:
             break
         snapshot.update(current)
@@ -349,10 +459,14 @@ def _load_corrections(url: str) -> str:
                 continue
     if not entries:
         return ""
-    lines = [f"Previously corrected fields on {domain}:"]
-    for entry in entries[-5:]:
+    # Deduplicate: latest correction per field wins.
+    merged: dict[str, dict] = {}
+    for entry in entries:
         for field, change in entry["corrections"].items():
-            lines.append(f"- {field}: use '{change['user']}' (not '{change['agent']}')")
+            merged[field] = change
+    lines = [f"Previously corrected fields on {domain}:"]
+    for field, change in merged.items():
+        lines.append(f"- {field}: use '{change['user']}' (not '{change['agent']}')")
     return "\n".join(lines)
 
 
@@ -381,6 +495,7 @@ async def main(url: str, provider: str) -> None:
 
     attachments = _attachment_paths()
     if attachments:
+        _capture("file_attachments_found", {"attachment_count": len(attachments)})
         upload_rule = (
             "- For each file upload, read the field label on the page; choose one path from "
             f"this list that fits that label (CV vs cover letter vs other document): {attachments}.\n"
@@ -415,28 +530,44 @@ Rules:
         task=task,
         llm=llm,
         browser_profile=browser_profile,
-        initial_actions=[{"go_to_url": {"url": url}}],
+        initial_actions=[{"navigate": {"url": url, "new_tab": False}}],
         available_file_paths=attachments or None,
     )
+    _capture("form_fill_started", {
+        "provider": provider,
+        "has_attachments": bool(attachments),
+        "has_prior_corrections": bool(prior_corrections),
+    })
+    timed_out = False
     try:
         async with asyncio.timeout(cfg.agent_timeout):
             await agent.run()
     except TimeoutError:
+        timed_out = True
+        _capture("form_fill_timed_out", {
+            "provider": provider,
+            "timeout_seconds": cfg.agent_timeout,
+        })
         console.print(
             f"\n[err]Agent timed out after {cfg.agent_timeout}s.[/] "
             "The browser is still open — you can continue manually.",
         )
+    if not timed_out:
+        _capture("form_fill_completed", {"provider": provider, "has_attachments": bool(attachments)})
     # Snapshot what the agent filled, then poll for user edits until submit/navigate.
+    console.print("\n[info]Capturing form state — please review and submit in the browser.[/]")
     agent_snapshot: dict = {}
     user_snapshot: dict = {}
     if agent.browser_session is not None:
         try:
             page = await agent.browser_session.get_current_page()
-            agent_snapshot = await _snapshot_fields(page)
-            user_snapshot = dict(agent_snapshot)
-            await _poll_fields(page, user_snapshot)
-        except Exception:
-            pass
+            if page is not None:
+                agent_snapshot = await _snapshot_fields(page)
+                console.print(f"[dim]Tracking {len(agent_snapshot)} field(s)…[/]")
+                user_snapshot = dict(agent_snapshot)
+                await _poll_fields(page, user_snapshot)
+        except Exception as exc:
+            console.print(f"[err]Warning:[/] Could not track field changes: {exc}")
 
     print("\a", end="", flush=True)
 
@@ -447,6 +578,7 @@ Rules:
     }
     if corrections:
         _save_corrections(url, corrections)
+        _capture("corrections_saved", {"correction_count": len(corrections)})
         console.print(f"[info]Saved {len(corrections)} correction(s) for next time.[/]")
 
     console.print("[info]Submitted — browser stays open.[/]")
@@ -517,6 +649,7 @@ def _onboard_profile() -> None:
 
     cfg.knowledge_dir.mkdir(parents=True, exist_ok=True)
     cfg.profile.write_text("\n".join(lines))
+    _capture("profile_created")
     console.print(f"\n[success]✓[/] Saved to [bold]{cfg.profile}[/]")
     console.print(
         "  Drop extra files (PDF, markdown, text) into knowledge/ any time.\n",
@@ -553,6 +686,7 @@ def _onboard_api_key() -> None:
         cfg.env_file.chmod(0o600)
         os.environ[info["env"]] = key
         os.environ["AUTOFILL_PROVIDER"] = provider
+        _capture("api_key_configured", {"provider": provider})
         console.print("[success]✓[/] Saved to .env\n")
     else:
         console.print("[info]Skipped — set an API key before running autofill.[/]\n")
@@ -575,6 +709,7 @@ def _onboard_files() -> None:
 
 def _onboard() -> None:
     """Run the full first-time setup: profile, API key, extra files, then ingest."""
+    _capture("onboarding_started")
     console.print()
     console.print(_banner(
         f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
@@ -677,10 +812,12 @@ def cli() -> None:
             f"Invalid URL '{args.command}'. Please provide a URL starting with http:// or https://"
         )
 
+    provider = args.provider or _detect_provider() or "browseruse"
+    _capture("cli_invoked", {"provider": provider, "version": _VERSION})
+
     console.print()
     console.print(_banner(f"[bold]autofill[/]  [dim]v{_VERSION}[/]"))
     console.print()
-    provider = args.provider or _detect_provider() or "browseruse"
     ingest()
     asyncio.run(main(args.command, provider))
 
