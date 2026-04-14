@@ -5,6 +5,7 @@ import atexit
 import hashlib
 import json
 import os
+import re
 import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
@@ -403,13 +404,20 @@ async def _snapshot_fields(page) -> dict:
                     return '';
                 }
 
+                // Sensitive field names that must never be captured.
+                const SENSITIVE_KEY = /\b(password|passcode|otp|pin|2fa|ssn|social.?sec|cvv|cvc|card.?num|card.?number|expir|exp_|secret|token|auth|passport|birth|dob|bank|routing|account.?num)\b/i;
+
                 document.querySelectorAll('input, textarea, select').forEach(el => {
                     if (!el.name && !el.id) return;
-                    if (['submit','button','reset'].includes(el.type)) return;
+                    const elType = (el.type || '').toLowerCase();
+                    if (['submit','button','reset','password'].includes(elType)) return;
+                    // Skip fields whose name or id looks sensitive.
+                    const key = (el.name || el.id || '').toLowerCase();
+                    if (SENSITIVE_KEY.test(key)) return;
                     // Skip sentinel fields (Google Forms duplicates).
                     if (el.name && el.name.endsWith('_sentinel')) return;
 
-                    if (el.type === 'hidden') {
+                    if (elType === 'hidden') {
                         if (/^entry\\./.test(el.name)) {
                             const lbl = findLabel(el) || el.name;
                             result[lbl] = el.value;
@@ -470,13 +478,27 @@ def _load_corrections(url: str) -> str:
     return "\n".join(lines)
 
 
+_SENSITIVE_FIELD_RE = re.compile(
+    r"\b(password|passcode|otp|pin|2fa|ssn|social.?sec|cvv|cvc|card.?num|card.?number"
+    r"|expir|exp_|secret|token|auth|passport|birth|dob|bank|routing|account.?num)\b",
+    re.IGNORECASE,
+)
+
+
 def _save_corrections(url: str, corrections: dict) -> None:
-    """Append field corrections to the corrections log."""
+    """Append field corrections to the corrections log.
+
+    Sensitive fields (passwords, OTP, SSN, CVV, etc.) are stripped before
+    writing so they are never persisted or later injected into an LLM prompt.
+    """
+    safe = {k: v for k, v in corrections.items() if not _SENSITIVE_FIELD_RE.search(k)}
+    if not safe:
+        return
     entry = {
         "timestamp": datetime.now(timezone.utc).isoformat(),
         "url": url,
         "domain": urlparse(url).netloc,
-        "corrections": corrections,
+        "corrections": safe,
     }
     cfg.corrections_file.parent.mkdir(parents=True, exist_ok=True)
     with open(cfg.corrections_file, "a") as f:
