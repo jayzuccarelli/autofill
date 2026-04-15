@@ -364,86 +364,99 @@ def _llm(provider: str) -> object:
     raise ValueError(f"Unknown provider '{provider}'. Choose: anthropic, openai, browseruse")
 
 
-async def _snapshot_fields(page) -> dict:
-    """Read all visible form field values from the current page.
+_FORM_TAGS = frozenset({"input", "textarea", "select"})
+_FORM_ROLES = frozenset({"textbox", "combobox", "listbox", "spinbutton", "searchbox",
+                          "radio", "checkbox", "switch"})
 
-    Keys prefer ``<label>`` text over ``name``/``id`` — labels are stable
-    across page reloads even when frameworks generate random IDs.
+
+async def _snapshot_fields(session) -> dict:
+    """Snapshot form field values using browser-use's DOM + CDP value reads.
+
+    **Field discovery and labeling** — browser-use's accessibility tree
+    (``get_browser_state_summary``).  Labels come from the browser's own
+    accessible-name computation, which works on every site.
+
+    **Live values** — CDP ``DOM.resolveNode`` + ``Runtime.callFunctionOn``
+    to read the JS ``.value`` property for each field.  HTML attributes
+    don't update when users type, but ``.value`` does.
     """
     try:
-        raw = await page.evaluate("""
-            () => {
-                const result = {};
+        state = await session.get_browser_state_summary(include_screenshot=False)
+        if not state or not state.dom_state or not state.dom_state.selector_map:
+            return {}
 
-                // Helper: walk up from an element to find the question label.
-                function findLabel(el) {
-                    // 1. Standard <label> association.
-                    if (el.labels && el.labels.length) return el.labels[0].textContent.trim();
-                    if (el.id) {
-                        const ext = document.querySelector('label[for="' + el.id + '"]');
-                        if (ext) return ext.textContent.trim();
-                    }
-                    // 2. Walk up the DOM looking for a heading or label-like element.
-                    let node = el.parentElement;
-                    for (let i = 0; i < 10 && node; i++) {
-                        // role="heading" (Google Forms, Typeform, etc.)
-                        const h = node.querySelector('[role="heading"]');
-                        if (h) return h.textContent.trim();
-                        // data-params often contains the question text on Google Forms
-                        if (node.dataset && node.dataset.params) {
-                            try {
-                                const parts = JSON.parse(node.dataset.params.replace(/^%.@/, '['));
-                                if (typeof parts[1] === 'string' && parts[1]) return parts[1];
-                            } catch(e) {}
-                        }
-                        // Any actual heading tag
-                        const ht = node.querySelector('h1,h2,h3,h4,h5,h6');
-                        if (ht) return ht.textContent.trim();
-                        node = node.parentElement;
-                    }
-                    return '';
-                }
+        cdp_session = await session.get_or_create_cdp_session(focus=False)
 
-                // Sensitive field names that must never be captured.
-                const SENSITIVE_KEY = /\b(password|passcode|otp|pin|2fa|ssn|social.?sec|cvv|cvc|card.?num|card.?number|expir|exp_|secret|token|auth|passport|birth|dob|bank|routing|account.?num)\b/i;
+        result: dict[str, str] = {}
+        for _idx, node in state.dom_state.selector_map.items():
+            try:
+                tag = (node.tag_name or "").lower()
+                role = (node.ax_node.role or "").lower() if node.ax_node else ""
 
-                document.querySelectorAll('input, textarea, select').forEach(el => {
-                    if (!el.name && !el.id) return;
-                    const elType = (el.type || '').toLowerCase();
-                    if (['submit','button','reset','password'].includes(elType)) return;
-                    // Skip fields whose name or id looks sensitive.
-                    const key = (el.name || el.id || '').toLowerCase();
-                    if (SENSITIVE_KEY.test(key)) return;
-                    // Skip sentinel fields (Google Forms duplicates).
-                    if (el.name && el.name.endsWith('_sentinel')) return;
+                if tag not in _FORM_TAGS and role not in _FORM_ROLES:
+                    continue
 
-                    if (elType === 'hidden') {
-                        if (/^entry\\./.test(el.name)) {
-                            const lbl = findLabel(el) || el.name;
-                            result[lbl] = el.value;
-                        }
-                    } else {
-                        const lbl = findLabel(el) || el.name || el.id;
-                        result[lbl] = el.value;
-                    }
-                });
+                attrs = node.attributes or {}
 
-                return JSON.stringify(result);
-            }
-        """)
-        return json.loads(raw) if raw else {}
+                # Build label from accessibility name.
+                key = ""
+                if node.ax_node and node.ax_node.name:
+                    key = node.ax_node.name.strip()
+                if not key:
+                    key = (attrs.get("aria-label", "")
+                           or attrs.get("placeholder", "")
+                           or attrs.get("name", "")
+                           or attrs.get("id", "")
+                           or f"field_{_idx}")
+
+                # Read live value via CDP.
+                value = await _read_live_value(cdp_session, node.backend_node_id, role)
+                if value is not None:
+                    result[key] = value
+            except Exception:
+                continue
+        return result
     except Exception:
         return {}
 
 
-async def _poll_fields(page, snapshot: dict, interval: float = 0.5,
+async def _read_live_value(cdp_session, backend_node_id: int, role: str) -> str | None:
+    """Read the current JS .value (or checked state) of a DOM node via CDP."""
+    try:
+        resolve_result = await cdp_session.cdp_client.send.DOM.resolveNode(
+            {"backendNodeId": backend_node_id},
+            session_id=cdp_session.session_id,
+        )
+        object_id = resolve_result.get("object", {}).get("objectId")
+        if not object_id:
+            return None
+
+        if role in ("checkbox", "radio", "switch"):
+            fn = "function() { return this.checked ? 'true' : 'false'; }"
+        else:
+            fn = "function() { return this.value || ''; }"
+
+        call_result = await cdp_session.cdp_client.send.Runtime.callFunctionOn(
+            {
+                "objectId": object_id,
+                "functionDeclaration": fn,
+                "returnByValue": True,
+            },
+            session_id=cdp_session.session_id,
+        )
+        return call_result.get("result", {}).get("value", "")
+    except Exception:
+        return None
+
+
+async def _poll_fields(session, snapshot: dict, interval: float = 1.0,
                        timeout: float = 600) -> None:
     """Continuously update snapshot with current field values until page navigates or *timeout*."""
     deadline = asyncio.get_event_loop().time() + timeout
     while asyncio.get_event_loop().time() < deadline:
         await asyncio.sleep(interval)
         try:
-            current = await _snapshot_fields(page)
+            current = await _snapshot_fields(session)
         except Exception:
             break
         if not current:
@@ -554,6 +567,7 @@ Rules:
         browser_profile=browser_profile,
         initial_actions=[{"navigate": {"url": url, "new_tab": False}}],
         available_file_paths=attachments or None,
+        use_judge=False,
     )
     _capture("form_fill_started", {
         "provider": provider,
@@ -563,7 +577,7 @@ Rules:
     timed_out = False
     try:
         async with asyncio.timeout(cfg.agent_timeout):
-            await agent.run()
+            await agent.run(max_steps=15)
     except TimeoutError:
         timed_out = True
         _capture("form_fill_timed_out", {
@@ -582,12 +596,10 @@ Rules:
     user_snapshot: dict = {}
     if agent.browser_session is not None:
         try:
-            page = await agent.browser_session.get_current_page()
-            if page is not None:
-                agent_snapshot = await _snapshot_fields(page)
-                console.print(f"[dim]Tracking {len(agent_snapshot)} field(s)…[/]")
-                user_snapshot = dict(agent_snapshot)
-                await _poll_fields(page, user_snapshot)
+            agent_snapshot = await _snapshot_fields(agent.browser_session)
+            console.print(f"[dim]Tracking {len(agent_snapshot)} field(s)…[/]")
+            user_snapshot = dict(agent_snapshot)
+            await _poll_fields(agent.browser_session, user_snapshot)
         except Exception as exc:
             console.print(f"[err]Warning:[/] Could not track field changes: {exc}")
 
