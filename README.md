@@ -55,6 +55,10 @@ autofill https://jobs.example.com/apply
 
 The agent opens a browser, fills the form, and leaves it open for you to review and submit.
 
+```bash
+autofill --provider anthropic https://jobs.example.com/apply  # override provider
+```
+
 ### Uninstall
 
 ```bash
