@@ -410,6 +410,10 @@ async def _snapshot_fields(session) -> dict:
                            or attrs.get("id", "")
                            or f"field_{_idx}")
 
+                # Skip sensitive fields (passwords, OTP, card numbers, etc.)
+                if _SENSITIVE_FIELD_RE.search(key):
+                    continue
+
                 # Read live value via CDP.
                 value = await _read_live_value(cdp_session, node.backend_node_id, role)
                 if value is not None:
@@ -433,7 +437,26 @@ async def _read_live_value(cdp_session, backend_node_id: int, role: str) -> str 
             return None
 
         if role in ("checkbox", "radio", "switch"):
-            fn = "function() { return this.checked ? 'true' : 'false'; }"
+            # Native inputs use .checked; ARIA widgets (e.g. div[role=radio])
+            # use the aria-checked attribute instead.
+            fn = (
+                "function() {"
+                "  if (typeof this.checked === 'boolean') return this.checked ? 'true' : 'false';"
+                "  var ac = this.getAttribute('aria-checked');"
+                "  if (ac) return ac;"
+                "  return 'false';"
+                "}"
+            )
+        elif role in ("combobox", "listbox"):
+            # Read both .value and aria-selected text for custom dropdowns.
+            fn = (
+                "function() {"
+                "  if (this.value) return this.value;"
+                "  var sel = this.querySelector('[aria-selected=\"true\"]');"
+                "  if (sel) return sel.textContent.trim();"
+                "  return '';"
+                "}"
+            )
         else:
             fn = "function() { return this.value || ''; }"
 
@@ -617,6 +640,14 @@ Rules:
         console.print(f"[info]Saved {len(corrections)} correction(s) for next time.[/]")
 
     console.print("[info]Submitted — browser stays open.[/]")
+
+    # Clean up browser-use's background tasks so the process can exit.
+    # stop() tears down event buses and watchdogs but keeps the browser open.
+    if agent.browser_session is not None:
+        try:
+            await agent.browser_session.stop()
+        except Exception:
+            pass
 
 
 def _has_profile_content() -> bool:
