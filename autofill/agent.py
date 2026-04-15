@@ -1,10 +1,18 @@
 """AI-powered form autofill: ingest local knowledge, retrieve context, fill form."""
 
 import asyncio
+import atexit
 import hashlib
+import json
 import os
+import re
+import uuid
 from dataclasses import dataclass
+from datetime import datetime, timezone
 from pathlib import Path
+from urllib.parse import urlparse
+
+from posthog import Posthog
 
 import browser_use as bu
 import chromadb
@@ -49,6 +57,9 @@ class Config:
     anthropic_model: str = "claude-sonnet-4-20250514"  # Anthropic Sonnet
     openai_model: str = "gpt-4o"                       # OpenAI GPT-4o
 
+    # Corrections
+    corrections_file: Path = Path("knowledge/.corrections.jsonl")
+
     # Agent
     agent_timeout: int = 600  # seconds before agent.run() is cancelled
 
@@ -87,6 +98,54 @@ _THEME = Theme(
     {"accent": _ACCENT, "success": "green", "info": "dim", "err": "bold red"}
 )
 console = Console(theme=_THEME)
+
+# ---------------------------------------------------------------------------
+# PostHog analytics helpers
+# ---------------------------------------------------------------------------
+
+_posthog_instance: Posthog | None = None
+
+
+def _get_install_id() -> str:
+    """Return a stable anonymous install ID, creating one if needed."""
+    id_file = Path(".autofill_install_id")
+    if id_file.exists():
+        return id_file.read_text().strip()
+    new_id = f"install_{uuid.uuid4().hex}"
+    try:
+        id_file.write_text(new_id)
+    except OSError:
+        pass
+    return new_id
+
+
+def _ph() -> Posthog | None:
+    """Return the module-level PostHog client, initialising on first call."""
+    global _posthog_instance
+    if _posthog_instance is None:
+        token = os.getenv("POSTHOG_PROJECT_TOKEN")
+        if token:
+            _posthog_instance = Posthog(
+                token,
+                host=os.getenv("POSTHOG_HOST", "https://us.i.posthog.com"),
+                enable_exception_autocapture=True,
+            )
+            atexit.register(_posthog_instance.shutdown)
+    return _posthog_instance
+
+
+def _capture(event: str, properties: dict | None = None) -> None:
+    """Capture a PostHog event if the client is configured."""
+    client = _ph()
+    if client:
+        client.capture(
+            distinct_id=_get_install_id(),
+            event=event,
+            properties=properties or {},
+        )
+
+
+# ---------------------------------------------------------------------------
 
 _Q_STYLE = questionary.Style(
     [
@@ -221,6 +280,7 @@ def ingest() -> None:
         if not path.name.startswith(".")
         and path.is_file()
         and path.name != "profile.example.md"
+        and path.name != cfg.corrections_file.name
     }
 
     # Remove deleted files
@@ -259,6 +319,8 @@ def ingest() -> None:
                     metadatas=[{"hash": h}] * len(batch),
                 )
             progress.advance(task_id)
+
+    _capture("knowledge_ingested", {"file_count": len(to_ingest)})
 
 
 def retrieve(query: str, n: int = cfg.retrieval_n) -> str:
@@ -303,6 +365,160 @@ def _llm(provider: str) -> object:
     raise ValueError(f"Unknown provider '{provider}'. Choose: anthropic, openai, browseruse")
 
 
+_FORM_TAGS = frozenset({"input", "textarea", "select"})
+_FORM_ROLES = frozenset({"textbox", "combobox", "listbox", "spinbutton", "searchbox",
+                          "radio", "checkbox", "switch"})
+
+
+async def _snapshot_fields(session) -> dict:
+    """Snapshot form field values using browser-use's DOM + CDP value reads.
+
+    **Field discovery and labeling** — browser-use's accessibility tree
+    (``get_browser_state_summary``).  Labels come from the browser's own
+    accessible-name computation, which works on every site.
+
+    **Live values** — CDP ``DOM.resolveNode`` + ``Runtime.callFunctionOn``
+    to read the JS ``.value`` property for each field.  HTML attributes
+    don't update when users type, but ``.value`` does.
+    """
+    try:
+        state = await session.get_browser_state_summary(include_screenshot=False)
+        if not state or not state.dom_state or not state.dom_state.selector_map:
+            return {}
+
+        cdp_session = await session.get_or_create_cdp_session(focus=False)
+
+        result: dict[str, str] = {}
+        for _idx, node in state.dom_state.selector_map.items():
+            try:
+                tag = (node.tag_name or "").lower()
+                role = (node.ax_node.role or "").lower() if node.ax_node else ""
+
+                if tag not in _FORM_TAGS and role not in _FORM_ROLES:
+                    continue
+
+                attrs = node.attributes or {}
+
+                # Build label from accessibility name.
+                key = ""
+                if node.ax_node and node.ax_node.name:
+                    key = node.ax_node.name.strip()
+                if not key:
+                    key = (attrs.get("aria-label", "")
+                           or attrs.get("placeholder", "")
+                           or attrs.get("name", "")
+                           or attrs.get("id", "")
+                           or f"field_{_idx}")
+
+                # Read live value via CDP.
+                value = await _read_live_value(cdp_session, node.backend_node_id, role)
+                if value is not None:
+                    result[key] = value
+            except Exception:
+                continue
+        return result
+    except Exception:
+        return {}
+
+
+async def _read_live_value(cdp_session, backend_node_id: int, role: str) -> str | None:
+    """Read the current JS .value (or checked state) of a DOM node via CDP."""
+    try:
+        resolve_result = await cdp_session.cdp_client.send.DOM.resolveNode(
+            {"backendNodeId": backend_node_id},
+            session_id=cdp_session.session_id,
+        )
+        object_id = resolve_result.get("object", {}).get("objectId")
+        if not object_id:
+            return None
+
+        if role in ("checkbox", "radio", "switch"):
+            fn = "function() { return this.checked ? 'true' : 'false'; }"
+        else:
+            fn = "function() { return this.value || ''; }"
+
+        call_result = await cdp_session.cdp_client.send.Runtime.callFunctionOn(
+            {
+                "objectId": object_id,
+                "functionDeclaration": fn,
+                "returnByValue": True,
+            },
+            session_id=cdp_session.session_id,
+        )
+        return call_result.get("result", {}).get("value", "")
+    except Exception:
+        return None
+
+
+async def _poll_fields(session, snapshot: dict, interval: float = 1.0,
+                       timeout: float = 600) -> None:
+    """Continuously update snapshot with current field values until page navigates or *timeout*."""
+    deadline = asyncio.get_event_loop().time() + timeout
+    while asyncio.get_event_loop().time() < deadline:
+        await asyncio.sleep(interval)
+        try:
+            current = await _snapshot_fields(session)
+        except Exception:
+            break
+        if not current:
+            break
+        snapshot.update(current)
+
+
+def _load_corrections(url: str) -> str:
+    """Return previously saved corrections for this domain, formatted for the task prompt."""
+    if not cfg.corrections_file.exists():
+        return ""
+    domain = urlparse(url).netloc
+    entries = []
+    with open(cfg.corrections_file) as f:
+        for line in f:
+            try:
+                entry = json.loads(line)
+                if entry.get("domain") == domain:
+                    entries.append(entry)
+            except Exception:
+                continue
+    if not entries:
+        return ""
+    # Deduplicate: latest correction per field wins, capped to last 5 sessions.
+    merged: dict[str, dict] = {}
+    for entry in entries[-5:]:
+        for field, change in entry["corrections"].items():
+            merged[field] = change
+    lines = [f"Previously corrected fields on {domain}:"]
+    for field, change in merged.items():
+        lines.append(f"- {field}: use '{change['user']}' (not '{change['agent']}')")
+    return "\n".join(lines)
+
+
+_SENSITIVE_FIELD_RE = re.compile(
+    r"\b(password|passcode|otp|pin|2fa|ssn|social.?sec|cvv|cvc|card.?num|card.?number"
+    r"|expir|exp_|secret|token|auth|passport|birth|dob|bank|routing|account.?num)\b",
+    re.IGNORECASE,
+)
+
+
+def _save_corrections(url: str, corrections: dict) -> None:
+    """Append field corrections to the corrections log.
+
+    Sensitive fields (passwords, OTP, SSN, CVV, etc.) are stripped before
+    writing so they are never persisted or later injected into an LLM prompt.
+    """
+    safe = {k: v for k, v in corrections.items() if not _SENSITIVE_FIELD_RE.search(k)}
+    if not safe:
+        return
+    entry = {
+        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "url": url,
+        "domain": urlparse(url).netloc,
+        "corrections": safe,
+    }
+    cfg.corrections_file.parent.mkdir(parents=True, exist_ok=True)
+    with open(cfg.corrections_file, "a") as f:
+        f.write(json.dumps(entry) + "\n")
+
+
 async def main(url: str, provider: str) -> None:
     """Ingest knowledge, build the task prompt, and run the browser agent."""
     ingest()
@@ -315,6 +531,7 @@ async def main(url: str, provider: str) -> None:
 
     attachments = _attachment_paths()
     if attachments:
+        _capture("file_attachments_found", {"attachment_count": len(attachments)})
         upload_rule = (
             "- For each file upload, read the field label on the page; choose one path from "
             f"this list that fits that label (CV vs cover letter vs other document): {attachments}.\n"
@@ -325,12 +542,15 @@ async def main(url: str, provider: str) -> None:
             "- Do not upload real identity documents; skip file uploads requiring real files."
         )
 
+    prior_corrections = _load_corrections(url)
+    corrections_section = f"\n{prior_corrections}\n" if prior_corrections else ""
+
     task = f"""
 Open {url} and fill every applicable field using the profile below (map labels
 loosely — e.g. "Phone" = telephone):
 
 {profile}
-
+{corrections_section}
 Rules:
 - Prefer selects and radios that match the values above; otherwise choose the closest reasonable option.
 - Try to answer all the questions; if unsure, make a reasonable guess.
@@ -346,31 +566,57 @@ Rules:
         task=task,
         llm=llm,
         browser_profile=browser_profile,
-        initial_actions=[{"go_to_url": {"url": url}}],
+        initial_actions=[{"navigate": {"url": url, "new_tab": False}}],
         available_file_paths=attachments or None,
+        use_judge=False,
     )
+    _capture("form_fill_started", {
+        "provider": provider,
+        "has_attachments": bool(attachments),
+        "has_prior_corrections": bool(prior_corrections),
+    })
+    timed_out = False
     try:
         async with asyncio.timeout(cfg.agent_timeout):
-            await agent.run()
+            await agent.run(max_steps=15)
     except TimeoutError:
+        timed_out = True
+        _capture("form_fill_timed_out", {
+            "provider": provider,
+            "timeout_seconds": cfg.agent_timeout,
+        })
         console.print(
             f"\n[err]Agent timed out after {cfg.agent_timeout}s.[/] "
             "The browser is still open — you can continue manually.",
         )
-    print("\a", end="", flush=True)
-    console.print(
-        "\n[success]✓[/] Browser left open — review and submit in the window."
-    )
-    await asyncio.to_thread(
-        input, "  Press Enter to exit when finished. "
-    )
-    # keep_alive leaves CDP / reconnect tasks running; exiting asyncio.run() then
-    # destroys pending tasks (noisy errors). Tear down the session after review.
+    if not timed_out:
+        _capture("form_fill_completed", {"provider": provider, "has_attachments": bool(attachments)})
+    # Snapshot what the agent filled, then poll for user edits until submit/navigate.
+    console.print("\n[info]Capturing form state — please review and submit in the browser.[/]")
+    agent_snapshot: dict = {}
+    user_snapshot: dict = {}
     if agent.browser_session is not None:
         try:
-            await agent.browser_session.kill()
-        except Exception:
-            pass
+            agent_snapshot = await _snapshot_fields(agent.browser_session)
+            console.print(f"[dim]Tracking {len(agent_snapshot)} field(s)…[/]")
+            user_snapshot = dict(agent_snapshot)
+            await _poll_fields(agent.browser_session, user_snapshot)
+        except Exception as exc:
+            console.print(f"[err]Warning:[/] Could not track field changes: {exc}")
+
+    print("\a", end="", flush=True)
+
+    corrections = {
+        k: {"agent": agent_snapshot.get(k, ""), "user": v}
+        for k, v in user_snapshot.items()
+        if agent_snapshot.get(k) != v and v
+    }
+    if corrections:
+        _save_corrections(url, corrections)
+        _capture("corrections_saved", {"correction_count": len(corrections)})
+        console.print(f"[info]Saved {len(corrections)} correction(s) for next time.[/]")
+
+    console.print("[info]Submitted — browser stays open.[/]")
 
 
 def _has_profile_content() -> bool:
@@ -381,6 +627,8 @@ def _has_profile_content() -> bool:
         if p.name.startswith(".") or not p.is_file():
             continue
         if p.name == "profile.example.md":
+            continue
+        if p.name == cfg.corrections_file.name:
             continue
         if p.stat().st_size > 0:
             return True
@@ -438,6 +686,7 @@ def _onboard_profile() -> None:
 
     cfg.knowledge_dir.mkdir(parents=True, exist_ok=True)
     cfg.profile.write_text("\n".join(lines))
+    _capture("profile_created")
     console.print(f"\n[success]✓[/] Saved to [bold]{cfg.profile}[/]")
     console.print(
         "  Drop extra files (PDF, markdown, text) into knowledge/ any time.\n",
@@ -474,6 +723,7 @@ def _onboard_api_key() -> None:
         cfg.env_file.chmod(0o600)
         os.environ[info["env"]] = key
         os.environ["AUTOFILL_PROVIDER"] = provider
+        _capture("api_key_configured", {"provider": provider})
         console.print("[success]✓[/] Saved to .env\n")
     else:
         console.print("[info]Skipped — set an API key before running autofill.[/]\n")
@@ -496,6 +746,7 @@ def _onboard_files() -> None:
 
 def _onboard() -> None:
     """Run the full first-time setup: profile, API key, extra files, then ingest."""
+    _capture("onboarding_started")
     console.print()
     console.print(_banner(
         f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
@@ -598,10 +849,12 @@ def cli() -> None:
             f"Invalid URL '{args.command}'. Please provide a URL starting with http:// or https://"
         )
 
+    provider = args.provider or _detect_provider() or "browseruse"
+    _capture("cli_invoked", {"provider": provider, "version": _VERSION})
+
     console.print()
     console.print(_banner(f"[bold]autofill[/]  [dim]v{_VERSION}[/]"))
     console.print()
-    provider = args.provider or _detect_provider() or "browseruse"
     ingest()
     asyncio.run(main(args.command, provider))
 

@@ -25,6 +25,7 @@ dependencies = [
     "browser-use>=0.12.6",
     "chromadb>=0.6",
     "pdfplumber>=0.11",
+    "posthog>=3.0.0",
     "python-dotenv>=1.0",
     "questionary>=2.1.1",
     "rich>=14.0",
