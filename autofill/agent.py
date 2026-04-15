@@ -759,20 +759,20 @@ def _onboard() -> None:
 def _uninstall() -> None:
     import shutil
 
-    repo_root = Path(__file__).resolve().parent.parent
-    symlink = Path.home() / ".local" / "bin" / "autofill"
-    expected = Path.home() / "autofill"
+    install_dir = Path.home() / "autofill"
+    wrapper = Path.home() / ".local" / "bin" / "autofill"
 
-    if repo_root != expected:
-        raise SystemExit(
-            f"Refusing to uninstall: running from {repo_root}, "
-            f"but uninstall only targets {expected} (the install.sh location).\n"
-            "If you installed with install.sh, run the autofill from ~/.local/bin/autofill.\n"
-            "If this is a dev clone, just delete it manually."
-        )
+    targets = [p for p in (install_dir, wrapper) if p.exists() or p.is_symlink()]
+    if not targets:
+        print("Nothing to uninstall: no install found at ~/autofill or ~/.local/bin/autofill.")
+        return
 
-    print(f"\033[1;31mThis will delete {repo_root}\033[0m "
-          "(including your profile and knowledge files).")
+    print("\033[1;31mThis will delete:\033[0m")
+    for p in targets:
+        print(f"  {p}")
+    if install_dir in targets:
+        print("(including your profile and knowledge files)")
+
     confirm = questionary.confirm(
         "Are you sure?", default=False, style=_Q_STYLE
     ).ask()
@@ -780,10 +780,10 @@ def _uninstall() -> None:
         print("Cancelled.")
         return
 
-    if symlink.is_symlink():
-        symlink.unlink()
-
-    shutil.rmtree(repo_root)
+    if wrapper.exists() or wrapper.is_symlink():
+        wrapper.unlink()
+    if install_dir.exists():
+        shutil.rmtree(install_dir)
     print("\u2713 autofill uninstalled.")
 
 
