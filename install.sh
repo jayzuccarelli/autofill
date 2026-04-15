@@ -1,7 +1,6 @@
 #!/usr/bin/env bash
-# Install autofill: uv (if needed) + clone + uv sync + add to PATH.
-# Remote: curl -fsSL https://raw.githubusercontent.com/jayzuccarelli/autofill/main/install.sh | bash
-# Local:  ./install.sh
+# Install autofill: uv (if needed) + clone into ~/autofill + uv sync + add to PATH.
+# Run with: curl -fsSL https://raw.githubusercontent.com/jayzuccarelli/autofill/main/install.sh | bash
 set -euo pipefail
 
 export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
@@ -45,30 +44,6 @@ WRAPPER
   fi
 }
 
-# --- Local path (./install.sh from inside a clone) ---
-_script="${BASH_SOURCE[0]:-}"
-if [[ -n "$_script" && "$_script" != "-" ]]; then
-  SCRIPT_DIR="$(cd "$(dirname "$_script")" && pwd)"
-  if [[ -f "${SCRIPT_DIR}/pyproject.toml" ]]; then
-    cd "$SCRIPT_DIR"
-    install_uv
-    if ! command -v uv >/dev/null 2>&1; then
-      echo "uv installed but not on PATH. Open a new terminal and try again." >&2
-      exit 1
-    fi
-    uv sync --quiet
-    link_binary "$SCRIPT_DIR"
-    echo ""
-    if [[ ":$PATH:" == *":$HOME/.local/bin:"* ]]; then
-      printf '✓ autofill installed.\n\n  Run: \033[1;38;2;120;81;169mautofill\033[0m\n'
-    else
-      printf '✓ autofill installed.\n\n  Run: \033[1;38;2;120;81;169mexec $SHELL && autofill\033[0m\n'
-    fi
-    exit 0
-  fi
-fi
-
-# --- Remote path (curl | bash) ---
 install_uv
 if ! command -v uv >/dev/null 2>&1; then
   echo "uv installed but not on PATH. Open a new terminal and try again." >&2
