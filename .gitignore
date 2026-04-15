@@ -199,6 +199,10 @@ knowledge/*
 !knowledge/.gitkeep
 !knowledge/profile.example.md
 
+# Telemetry / PostHog leftovers
+.autofill_install_id
+posthog-setup-report.md
+
 # PyPI configuration file
 .pypirc
 
