@@ -1,22 +1,19 @@
 """AI-powered form autofill: ingest local knowledge, retrieve context, fill form."""
 
 import asyncio
-import atexit
 import hashlib
 import json
 import os
 import re
-import uuid
 from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from urllib.parse import urlparse
 
-from posthog import Posthog
-
 import browser_use as bu
 import chromadb
 import questionary
+from autofill.telemetry import track as _capture
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.progress import (
@@ -98,51 +95,6 @@ _THEME = Theme(
     {"accent": _ACCENT, "success": "green", "info": "dim", "err": "bold red"}
 )
 console = Console(theme=_THEME)
-
-# ---------------------------------------------------------------------------
-# PostHog analytics helpers
-# ---------------------------------------------------------------------------
-
-_posthog_instance: Posthog | None = None
-
-
-def _get_install_id() -> str:
-    """Return a stable anonymous install ID, creating one if needed."""
-    id_file = Path(".autofill_install_id")
-    if id_file.exists():
-        return id_file.read_text().strip()
-    new_id = f"install_{uuid.uuid4().hex}"
-    try:
-        id_file.write_text(new_id)
-    except OSError:
-        pass
-    return new_id
-
-
-def _ph() -> Posthog | None:
-    """Return the module-level PostHog client, initialising on first call."""
-    global _posthog_instance
-    if _posthog_instance is None:
-        token = os.getenv("POSTHOG_PROJECT_TOKEN")
-        if token:
-            _posthog_instance = Posthog(
-                token,
-                host=os.getenv("POSTHOG_HOST", "https://us.i.posthog.com"),
-                enable_exception_autocapture=True,
-            )
-            atexit.register(_posthog_instance.shutdown)
-    return _posthog_instance
-
-
-def _capture(event: str, properties: dict | None = None) -> None:
-    """Capture a PostHog event if the client is configured."""
-    client = _ph()
-    if client:
-        client.capture(
-            distinct_id=_get_install_id(),
-            event=event,
-            properties=properties or {},
-        )
 
 
 # ---------------------------------------------------------------------------
