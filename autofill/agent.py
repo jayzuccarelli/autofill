@@ -58,7 +58,7 @@ class Config:
     openai_model: str = "gpt-4o"                       # OpenAI GPT-4o
 
     # Corrections
-    corrections_file: Path = Path("knowledge/corrections.jsonl")
+    corrections_file: Path = Path("knowledge/.corrections.jsonl")
 
     # Agent
     agent_timeout: int = 600  # seconds before agent.run() is cancelled
@@ -280,6 +280,7 @@ def ingest() -> None:
         if not path.name.startswith(".")
         and path.is_file()
         and path.name != "profile.example.md"
+        and path.name != cfg.corrections_file.name
     }
 
     # Remove deleted files
@@ -480,9 +481,9 @@ def _load_corrections(url: str) -> str:
                 continue
     if not entries:
         return ""
-    # Deduplicate: latest correction per field wins.
+    # Deduplicate: latest correction per field wins, capped to last 5 sessions.
     merged: dict[str, dict] = {}
-    for entry in entries:
+    for entry in entries[-5:]:
         for field, change in entry["corrections"].items():
             merged[field] = change
     lines = [f"Previously corrected fields on {domain}:"]
@@ -626,6 +627,8 @@ def _has_profile_content() -> bool:
         if p.name.startswith(".") or not p.is_file():
             continue
         if p.name == "profile.example.md":
+            continue
+        if p.name == cfg.corrections_file.name:
             continue
         if p.stat().st_size > 0:
             return True
