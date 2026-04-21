@@ -153,6 +153,7 @@ def _detect_provider() -> str | None:
 
 
 def _has_any_api_key() -> bool:
+    """Return True if at least one recognised API key is present in the environment."""
     return _detect_provider() is not None
 
 
@@ -757,6 +758,7 @@ def _onboard() -> None:
 
 
 def _uninstall() -> None:
+    """Remove the autofill wrapper script and install directory after user confirmation."""
     import shutil
 
     install_dir = Path.home() / "autofill"
@@ -788,6 +790,7 @@ def _uninstall() -> None:
 
 
 def cli() -> None:
+    """Entry point: parse arguments and dispatch to onboarding, status display, or form fill."""
     os.chdir(Path(__file__).resolve().parent.parent)
     load_dotenv()
     import argparse
@@ -828,9 +831,10 @@ def cli() -> None:
         )
 
     if needs_setup:
-        raise SystemExit(
-            "Not set up yet. Run [bold]autofill[/] first, then [bold]autofill <url>[/]."
+        console.print(
+            "[err]Not set up yet.[/] Run [bold]autofill[/] first, then [bold]autofill <url>[/]."
         )
+        raise SystemExit(1)
 
     provider = args.provider or _detect_provider() or "browseruse"
     _capture("cli_invoked", {"provider": provider, "version": _VERSION})
