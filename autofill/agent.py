@@ -153,6 +153,7 @@ def _detect_provider() -> str | None:
 
 
 def _has_any_api_key() -> bool:
+    """Return True if at least one recognised API key is present in the environment."""
     return _detect_provider() is not None
 
 
@@ -734,7 +735,7 @@ def _onboard() -> None:
     console.print(_banner(
         f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
         "",
-        "Welcome! Let's get you set up.",
+        "Looks like you're new here — starting setup.",
     ))
     console.print()
 
@@ -753,10 +754,11 @@ def _onboard() -> None:
             "No profile content found after indexing. "
             "Add info to knowledge/profile.md and run autofill again."
         )
-    console.print("[success]✓[/] Done! You're all set.\n")
+    console.print("[success]✓[/] Setup complete. Run [bold]autofill <url>[/] to fill a form.\n")
 
 
 def _uninstall() -> None:
+    """Remove the autofill wrapper script and install directory after user confirmation."""
     import shutil
 
     install_dir = Path.home() / "autofill"
@@ -788,6 +790,7 @@ def _uninstall() -> None:
 
 
 def cli() -> None:
+    """Entry point: parse arguments and dispatch to onboarding, status display, or form fill."""
     os.chdir(Path(__file__).resolve().parent.parent)
     load_dotenv()
     import argparse
@@ -808,20 +811,15 @@ def cli() -> None:
 
     needs_setup = not _has_profile_content() or not _has_any_api_key()
 
-    if needs_setup:
-        _onboard()
-
     if not args.command:
         if needs_setup:
-            console.print(
-                "Setup complete. Next: [bold]autofill <form-url>[/]"
-            )
+            _onboard()
         else:
             console.print()
             console.print(_banner(
                 f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
                 "",
-                "Usage: [bold]autofill <form-url>[/]",
+                "Usage: [bold]autofill <url>[/]",
             ))
         return
 
@@ -831,6 +829,12 @@ def cli() -> None:
         raise SystemExit(
             f"Invalid URL '{args.command}'. Please provide a URL starting with http:// or https://"
         )
+
+    if needs_setup:
+        console.print(
+            "[err]Not set up yet.[/] Run [bold]autofill[/] first, then [bold]autofill <url>[/]."
+        )
+        raise SystemExit(1)
 
     provider = args.provider or _detect_provider() or "browseruse"
     _capture("cli_invoked", {"provider": provider, "version": _VERSION})
