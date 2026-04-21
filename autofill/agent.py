@@ -65,6 +65,9 @@ cfg = Config()
 
 # Attachable document types (not .md/.txt — those are indexed as text, not file-input bytes).
 _ATTACHABLE_SUFFIXES = frozenset({".pdf", ".doc", ".docx"})
+# Legacy .doc (1997-2003 OLE binary) has no viable pure-Python parser; we skip
+# it during ingestion but still allow it as an upload attachment.
+_UNPARSEABLE_SUFFIXES = frozenset({".doc"})
 
 _PROVIDERS: dict[str, dict[str, str]] = {
     "browseruse": {
@@ -165,7 +168,8 @@ def _client() -> chromadb.ClientAPI:
 
 def _read(path: Path) -> str:
     """Read a file's text content, truncating to ``cfg.max_text_chars``."""
-    if path.suffix == ".pdf":
+    suffix = path.suffix.lower()
+    if suffix == ".pdf":
         import pdfplumber
         parts: list[str] = []
         total = 0
@@ -179,7 +183,10 @@ def _read(path: Path) -> str:
                 parts.append(text)
                 total += len(text)
         return "\n".join(parts)
-    text = path.read_text()
+    if suffix == ".docx":
+        import docx2txt
+        return (docx2txt.process(str(path)) or "")[:cfg.max_text_chars]
+    text = path.read_text(encoding="utf-8", errors="replace")
     return text[:cfg.max_text_chars]
 
 
@@ -209,7 +216,11 @@ def _chunk_text(text: str) -> list[str]:
         chunk = text[start:end].strip()
         if chunk:
             chunks.append(chunk)
-        start = max(0, end - cfg.chunk_overlap) if end < len(text) else end
+        if end >= len(text):
+            break
+        # Always advance: without this, an early separator can make
+        # end - chunk_overlap <= start and the loop never terminates.
+        start = max(start + 1, end - cfg.chunk_overlap)
     return chunks
 
 
@@ -227,17 +238,27 @@ def ingest() -> None:
         if meta and "hash" in meta and fname not in stored_hashes:
             stored_hashes[fname] = meta["hash"]
 
-    current_files = {
-        path.name: path
-        for path in sorted(cfg.knowledge_dir.iterdir())
+    visible_files = [
+        path for path in sorted(cfg.knowledge_dir.iterdir())
         if not path.name.startswith(".")
         and path.is_file()
         and path.name != "profile.example.md"
         and path.name != cfg.corrections_file.name
+    ]
+    for path in visible_files:
+        if path.suffix.lower() in _UNPARSEABLE_SUFFIXES:
+            console.print(
+                f"[yellow]Warning:[/] [bold]{path.name}[/] is a legacy .doc file — "
+                "its content won't be indexed. Resave as .docx or PDF to make it searchable."
+            )
+    current_files = {
+        path.name: path
+        for path in visible_files
+        if path.suffix.lower() not in _UNPARSEABLE_SUFFIXES
     }
 
-    # Remove deleted files
-    for fname in set(stored_hashes) - set(current_files):
+    # Remove deleted files (covers rows even if they lacked a hash metadata).
+    for fname in set(stored_ids) - set(current_files):
         col.delete(ids=stored_ids[fname])
 
     # Add new or re-ingest modified files
@@ -428,17 +449,21 @@ async def _read_live_value(cdp_session, backend_node_id: int, role: str) -> str 
 
 async def _poll_fields(session, snapshot: dict, interval: float = 1.0,
                        timeout: float = 600) -> None:
-    """Continuously update snapshot with current field values until page navigates or *timeout*."""
-    deadline = asyncio.get_event_loop().time() + timeout
-    while asyncio.get_event_loop().time() < deadline:
+    """Continuously update snapshot with current field values until *timeout*.
+
+    Transient empty reads (mid-navigation, shadow DOM hiccups) are tolerated;
+    we only stop on a hard exception or the deadline.
+    """
+    loop = asyncio.get_running_loop()
+    deadline = loop.time() + timeout
+    while loop.time() < deadline:
         await asyncio.sleep(interval)
         try:
             current = await _snapshot_fields(session)
         except Exception:
             break
-        if not current:
-            break
-        snapshot.update(current)
+        if current:
+            snapshot.update(current)
 
 
 def _load_corrections(url: str) -> str:
@@ -447,7 +472,7 @@ def _load_corrections(url: str) -> str:
         return ""
     domain = urlparse(url).netloc
     entries = []
-    with open(cfg.corrections_file) as f:
+    with open(cfg.corrections_file, encoding="utf-8") as f:
         for line in f:
             try:
                 entry = json.loads(line)
@@ -491,13 +516,12 @@ def _save_corrections(url: str, corrections: dict) -> None:
         "corrections": safe,
     }
     cfg.corrections_file.parent.mkdir(parents=True, exist_ok=True)
-    with open(cfg.corrections_file, "a") as f:
+    with open(cfg.corrections_file, "a", encoding="utf-8") as f:
         f.write(json.dumps(entry) + "\n")
 
 
 async def main(url: str, provider: str) -> None:
-    """Ingest knowledge, build the task prompt, and run the browser agent."""
-    ingest()
+    """Build the task prompt and run the browser agent (ingest already ran in cli)."""
     profile = retrieve(cfg.retrieval_query)
     if not profile.strip():
         raise SystemExit(
@@ -565,42 +589,42 @@ Rules:
             f"\n[err]Agent timed out after {cfg.agent_timeout}s.[/] "
             "The browser is still open — you can continue manually.",
         )
-    if not timed_out:
-        _capture("form_fill_completed", {"provider": provider, "has_attachments": bool(attachments)})
-    # Snapshot what the agent filled, then poll for user edits until submit/navigate.
-    console.print("\n[info]Capturing form state — please review and submit in the browser.[/]")
-    agent_snapshot: dict = {}
-    user_snapshot: dict = {}
-    if agent.browser_session is not None:
-        try:
-            agent_snapshot = await _snapshot_fields(agent.browser_session)
-            console.print(f"[dim]Tracking {len(agent_snapshot)} field(s)…[/]")
-            user_snapshot = dict(agent_snapshot)
-            await _poll_fields(agent.browser_session, user_snapshot)
-        except Exception as exc:
-            console.print(f"[err]Warning:[/] Could not track field changes: {exc}")
+    try:
+        if not timed_out:
+            _capture("form_fill_completed", {"provider": provider, "has_attachments": bool(attachments)})
+        # Snapshot what the agent filled, then poll for user edits until submit/navigate.
+        console.print("\n[info]Capturing form state — please review and submit in the browser.[/]")
+        agent_snapshot: dict = {}
+        user_snapshot: dict = {}
+        if agent.browser_session is not None:
+            try:
+                agent_snapshot = await _snapshot_fields(agent.browser_session)
+                console.print(f"[dim]Tracking {len(agent_snapshot)} field(s)…[/]")
+                user_snapshot = dict(agent_snapshot)
+                await _poll_fields(agent.browser_session, user_snapshot)
+            except Exception as exc:
+                console.print(f"[err]Warning:[/] Could not track field changes: {exc}")
 
-    print("\a", end="", flush=True)
+        print("\a", end="", flush=True)
 
-    corrections = {
-        k: {"agent": agent_snapshot.get(k, ""), "user": v}
-        for k, v in user_snapshot.items()
-        if agent_snapshot.get(k) != v and v
-    }
-    if corrections:
-        _save_corrections(url, corrections)
-        _capture("corrections_saved", {"correction_count": len(corrections)})
-        console.print(f"[info]Saved {len(corrections)} correction(s) for next time.[/]")
+        corrections = {
+            k: {"agent": agent_snapshot.get(k, ""), "user": v}
+            for k, v in user_snapshot.items()
+            if agent_snapshot.get(k) != v and v
+        }
+        if corrections:
+            _save_corrections(url, corrections)
+            _capture("corrections_saved", {"correction_count": len(corrections)})
+            console.print(f"[info]Saved {len(corrections)} correction(s) for next time.[/]")
 
-    console.print("[info]Submitted — browser stays open.[/]")
-
-    # Clean up browser-use's background tasks so the process can exit.
-    # stop() tears down event buses and watchdogs but keeps the browser open.
-    if agent.browser_session is not None:
-        try:
-            await agent.browser_session.stop()
-        except Exception:
-            pass
+        console.print("[info]Submitted — browser stays open.[/]")
+    finally:
+        # Always tear down event buses and watchdogs (keeps the browser window open).
+        if agent.browser_session is not None:
+            try:
+                await agent.browser_session.stop()
+            except Exception:
+                pass
 
 
 def _has_profile_content() -> bool:
