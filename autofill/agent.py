@@ -734,7 +734,7 @@ def _onboard() -> None:
     console.print(_banner(
         f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
         "",
-        "Welcome! Let's get you set up.",
+        "Looks like you're new here — starting setup.",
     ))
     console.print()
 
@@ -753,7 +753,7 @@ def _onboard() -> None:
             "No profile content found after indexing. "
             "Add info to knowledge/profile.md and run autofill again."
         )
-    console.print("[success]✓[/] Done! You're all set.\n")
+    console.print("[success]✓[/] Setup complete. Run [bold]autofill <url>[/] to fill a form.\n")
 
 
 def _uninstall() -> None:
@@ -808,20 +808,15 @@ def cli() -> None:
 
     needs_setup = not _has_profile_content() or not _has_any_api_key()
 
-    if needs_setup:
-        _onboard()
-
     if not args.command:
         if needs_setup:
-            console.print(
-                "Setup complete. Next: [bold]autofill <form-url>[/]"
-            )
+            _onboard()
         else:
             console.print()
             console.print(_banner(
                 f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
                 "",
-                "Usage: [bold]autofill <form-url>[/]",
+                "Usage: [bold]autofill <url>[/]",
             ))
         return
 
@@ -830,6 +825,11 @@ def cli() -> None:
     if parsed.scheme not in ("http", "https"):
         raise SystemExit(
             f"Invalid URL '{args.command}'. Please provide a URL starting with http:// or https://"
+        )
+
+    if needs_setup:
+        raise SystemExit(
+            "Not set up yet. Run [bold]autofill[/] first, then [bold]autofill <url>[/]."
         )
 
     provider = args.provider or _detect_provider() or "browseruse"
