@@ -73,7 +73,7 @@ autofill uninstall
 - Learns from your corrections — edits you make before submitting are remembered for next time
 - Run `autofill` again any time to re-run setup if something is missing
 - Edit `knowledge/profile.md` or add files to `knowledge/` to update your info; the database re-indexes on each run
-- File uploads requiring real documents are skipped
+- Any `.pdf`, `.doc`, or `.docx` in `knowledge/` is offered to the agent for file-upload fields; it picks which file matches which upload based on form labels
 
 ## Privacy & telemetry
 

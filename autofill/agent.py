@@ -639,7 +639,7 @@ Rules:
             _capture("corrections_saved", {"correction_count": len(corrections)})
             console.print(f"[info]Saved {len(corrections)} correction(s) for next time.[/]")
 
-        console.print("[info]Submitted — browser stays open.[/]")
+        console.print("[info]Tracking complete — browser stays open for you to submit.[/]")
     finally:
         # Always tear down event buses and watchdogs (keeps the browser window open).
         if agent.browser_session is not None:
