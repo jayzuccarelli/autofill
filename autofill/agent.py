@@ -371,6 +371,10 @@ async def _snapshot_fields(session) -> dict:
         cdp_session = await session.get_or_create_cdp_session(focus=False)
 
         result: dict[str, str] = {}
+        # Disambiguate repeated labels (multi-row employment history, duplicate
+        # "Address line", etc.) by suffixing "(2)", "(3)", …  Stable within a
+        # run and usually stable across runs on the same form.
+        seen_counts: dict[str, int] = {}
         for _idx, node in state.dom_state.selector_map.items():
             try:
                 tag = (node.tag_name or "").lower()
@@ -382,19 +386,22 @@ async def _snapshot_fields(session) -> dict:
                 attrs = node.attributes or {}
 
                 # Build label from accessibility name.
-                key = ""
+                label = ""
                 if node.ax_node and node.ax_node.name:
-                    key = node.ax_node.name.strip()
-                if not key:
-                    key = (attrs.get("aria-label", "")
-                           or attrs.get("placeholder", "")
-                           or attrs.get("name", "")
-                           or attrs.get("id", "")
-                           or f"field_{_idx}")
+                    label = node.ax_node.name.strip()
+                if not label:
+                    label = (attrs.get("aria-label", "")
+                             or attrs.get("placeholder", "")
+                             or attrs.get("name", "")
+                             or attrs.get("id", "")
+                             or f"field_{_idx}")
 
                 # Skip sensitive fields (passwords, OTP, card numbers, etc.)
-                if _SENSITIVE_FIELD_RE.search(key):
+                if _SENSITIVE_FIELD_RE.search(label):
                     continue
+
+                seen_counts[label] = seen_counts.get(label, 0) + 1
+                key = label if seen_counts[label] == 1 else f"{label} ({seen_counts[label]})"
 
                 # Read live value via CDP.
                 value = await _read_live_value(cdp_session, node.backend_node_id, role)
