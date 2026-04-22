@@ -1,0 +1,61 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 312 248" width="312" height="248">
+  <defs>
+    <style>
+      @keyframes float {
+        0%, 100% { transform: translateY(0px); }
+        50%       { transform: translateY(-6px); }
+      }
+      @keyframes sway {
+        0%, 100% { transform: rotate(-4deg); }
+        50%       { transform: rotate(4deg); }
+      }
+      .phil  { animation: float 3s ease-in-out infinite; }
+      .t  { animation: sway 2s ease-in-out infinite; }
+      .t1 { transform-origin:  85px 125px; animation-delay:  0s;     }
+      .t2 { transform-origin: 105px 125px; animation-delay: -0.25s;  }
+      .t3 { transform-origin: 125px 125px; animation-delay: -0.5s;   }
+      .t4 { transform-origin: 145px 125px; animation-delay: -0.75s;  }
+      .t5 { transform-origin: 165px 125px; animation-delay: -1s;     }
+      .t6 { transform-origin: 185px 125px; animation-delay: -1.25s;  }
+      .t7 { transform-origin: 205px 125px; animation-delay: -1.5s;   }
+      .t8 { transform-origin: 225px 125px; animation-delay: -1.75s;  }
+    </style>
+  </defs>
+
+  <g class="phil">
+
+    <path class="t t1" d="M  85,111 C  85,121  63,136  54,143" stroke="#7952B3" stroke-width="16" stroke-linecap="round" fill="none"/>
+    <path class="t t2" d="M 105,125 C 105,144  79,171  69,178" stroke="#7952B3" stroke-width="16" stroke-linecap="round" fill="none"/>
+    <path class="t t3" d="M 125,125 C 125,160 106,197 100,204" stroke="#7952B3" stroke-width="16" stroke-linecap="round" fill="none"/>
+    <path class="t t4" d="M 145,125 C 145,179 134,216 131,222" stroke="#7952B3" stroke-width="16" stroke-linecap="round" fill="none"/>
+    <path class="t t5" d="M 165,125 C 165,179 176,216 179,222" stroke="#7952B3" stroke-width="16" stroke-linecap="round" fill="none"/>
+    <path class="t t6" d="M 185,125 C 185,160 204,197 210,204" stroke="#7952B3" stroke-width="16" stroke-linecap="round" fill="none"/>
+    <path class="t t7" d="M 205,125 C 205,144 231,171 241,178" stroke="#7952B3" stroke-width="16" stroke-linecap="round" fill="none"/>
+    <path class="t t8" d="M 225,111 C 225,121 246,136 256,143" stroke="#7952B3" stroke-width="16" stroke-linecap="round" fill="none"/>
+
+    <!-- Body -->
+    <rect x="70" y="15" width="170" height="110" rx="50" ry="50" fill="#7952B3"/>
+
+    <!-- Eyes: white sclera + pupil + highlight -->
+    <rect x="109" y="42" width="32" height="34" fill="#FFFFFF"/>
+    <rect x="169" y="42" width="32" height="34" fill="#FFFFFF"/>
+
+    <rect x="115" y="48" width="18" height="19" fill="#1A1A2E"/>
+    <rect x="175" y="48" width="18" height="19" fill="#1A1A2E"/>
+
+    <rect x="115" y="48" width="6"  height="6"  fill="#FFFFFF"/>
+    <rect x="175" y="48" width="6"  height="6"  fill="#FFFFFF"/>
+
+    <!-- Reading glasses -->
+    <!-- Left lens -->
+    <rect x="106" y="40" width="38" height="38" rx="8" fill="none" stroke="#2A1845" stroke-width="3.5"/>
+    <!-- Right lens -->
+    <rect x="166" y="40" width="38" height="38" rx="8" fill="none" stroke="#2A1845" stroke-width="3.5"/>
+    <!-- Bridge -->
+    <line x1="144" y1="59" x2="166" y2="59" stroke="#2A1845" stroke-width="3.5" stroke-linecap="round"/>
+    <!-- Temples -->
+    <line x1="106" y1="57" x2="85"  y2="62" stroke="#2A1845" stroke-width="3.5" stroke-linecap="round"/>
+    <line x1="204" y1="57" x2="225" y2="62" stroke="#2A1845" stroke-width="3.5" stroke-linecap="round"/>
+
+  </g>
+</svg>

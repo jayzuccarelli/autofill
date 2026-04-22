@@ -1,9 +1,18 @@
-# autofill
+<p align="center">
+  <img src=".github/assets/phil.svg" alt="Phil, the autofill octopus" width="220">
+</p>
 
-[![Python ≥3.11](https://img.shields.io/badge/python-%E2%89%A53.11-blue)](https://python.org)
-[![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+<h1 align="center">autofill</h1>
 
-AI-powered form autofill: describe yourself once, then point it at any web form and it fills every field for you. You review and submit manually.
+<p align="center">
+  <a href="https://python.org"><img src="https://img.shields.io/badge/python-%E2%89%A53.11-blue" alt="Python ≥3.11"></a>
+  <a href="LICENSE"><img src="https://img.shields.io/badge/license-MIT-green" alt="License: MIT"></a>
+</p>
+
+<p align="center">
+  AI-powered form autofill: describe yourself once, then point it at any web form and it fills every field for you. You review and submit manually.<br>
+  Meet <strong>Phil</strong> — eight hands on the keyboard so you don't have to use any.
+</p>
 
 Built on [browser-use](https://github.com/browser-use/browser-use).
 
