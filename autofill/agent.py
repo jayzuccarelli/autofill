@@ -185,7 +185,15 @@ def _read(path: Path) -> str:
         return "\n".join(parts)
     if suffix == ".docx":
         import docx2txt
-        return (docx2txt.process(str(path)) or "")[:cfg.max_text_chars]
+        try:
+            text = docx2txt.process(str(path)) or ""
+        except Exception as exc:
+            console.print(
+                f"[yellow]Warning:[/] failed to parse [bold]{path.name}[/] "
+                f"as .docx ({exc.__class__.__name__}); skipping."
+            )
+            return ""
+        return text[:cfg.max_text_chars]
     text = path.read_text(encoding="utf-8", errors="replace")
     return text[:cfg.max_text_chars]
 
@@ -448,14 +456,16 @@ async def _read_live_value(cdp_session, backend_node_id: int, role: str) -> str 
 
 
 async def _poll_fields(session, snapshot: dict, interval: float = 1.0,
-                       timeout: float = 600) -> None:
+                       timeout: float = 600, empty_exit_after: int = 5) -> None:
     """Continuously update snapshot with current field values until *timeout*.
 
-    Transient empty reads (mid-navigation, shadow DOM hiccups) are tolerated;
-    we only stop on a hard exception or the deadline.
+    Transient empty reads (mid-navigation, shadow DOM hiccups) are tolerated,
+    but *empty_exit_after* consecutive empty reads are treated as "user
+    navigated away / submitted" and stop the loop.
     """
     loop = asyncio.get_running_loop()
     deadline = loop.time() + timeout
+    empty_streak = 0
     while loop.time() < deadline:
         await asyncio.sleep(interval)
         try:
@@ -464,6 +474,11 @@ async def _poll_fields(session, snapshot: dict, interval: float = 1.0,
             break
         if current:
             snapshot.update(current)
+            empty_streak = 0
+        else:
+            empty_streak += 1
+            if empty_streak >= empty_exit_after:
+                break
 
 
 def _load_corrections(url: str) -> str:
