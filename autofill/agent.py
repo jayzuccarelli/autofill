@@ -51,8 +51,8 @@ class Config:
     retrieval_n: int = 10
 
     # Models — bump these when upgrading provider SDKs
-    anthropic_model: str = "claude-sonnet-4-20250514"  # Anthropic Sonnet
-    openai_model: str = "gpt-4o"                       # OpenAI GPT-4o
+    anthropic_model: str = "claude-haiku-4-5-20251001"  # Anthropic Haiku
+    openai_model: str = "gpt-4o-mini"                   # OpenAI GPT-4o mini
 
     # Corrections
     corrections_file: Path = Path("knowledge/.corrections.jsonl")
@@ -599,6 +599,8 @@ Rules:
         initial_actions=[{"navigate": {"url": url, "new_tab": False}}],
         available_file_paths=attachments or None,
         use_judge=False,
+        use_vision=False,
+        max_actions_per_step=10,
     )
     _capture("form_fill_started", {
         "provider": provider,
@@ -608,7 +610,7 @@ Rules:
     timed_out = False
     try:
         async with asyncio.timeout(cfg.agent_timeout):
-            await agent.run(max_steps=15)
+            await agent.run(max_steps=6)
     except TimeoutError:
         timed_out = True
         _capture("form_fill_timed_out", {
