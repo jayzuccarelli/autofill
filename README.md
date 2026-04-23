@@ -1,9 +1,9 @@
-<img src=".github/assets/phil.svg" alt="Phil, the autofill octopus" width="180" align="left">
-
 # autofill
 
 [![Python ≥3.11](https://img.shields.io/badge/python-%E2%89%A53.11-blue)](https://python.org)
 [![License: MIT](https://img.shields.io/badge/license-MIT-green)](LICENSE)
+
+<img src=".github/assets/phil.svg" alt="Phil, the autofill octopus" width="180" align="left">
 
 AI-powered form autofill: describe yourself once, then point it at any web form and it fills every field for you. You review and submit manually.
 
