@@ -51,7 +51,7 @@ class Config:
     retrieval_n: int = 10
 
     # Models — bump these when upgrading provider SDKs
-    anthropic_model: str = "claude-sonnet-4-20250514"  # Anthropic Sonnet
+    anthropic_model: str = "claude-sonnet-4-6"  # Anthropic Sonnet
     openai_model: str = "gpt-4o"                       # OpenAI GPT-4o
 
     # Corrections
