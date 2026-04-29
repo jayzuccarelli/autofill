@@ -576,14 +576,16 @@ async def main(url: str, provider: str) -> None:
     corrections_section = f"\n{prior_corrections}\n" if prior_corrections else ""
 
     task = f"""
-Open {url} and fill every applicable field using the profile below (map labels
-loosely — e.g. "Phone" = telephone):
+Open {url} and fill every applicable field using the profile below.
 
 {profile}
 {corrections_section}
 Rules:
+- Match profile values to form fields by label only (e.g. "Phone" → "Telephone"/"Mobile"; "LinkedIn" → "LinkedIn URL"). Do NOT map a profile value to a semantically-adjacent but distinct field — Phone never goes in Email, GitHub never goes in LinkedIn, etc.
+- Each form field receives at most one value. Never type into the same field index twice in one step. Never append a second profile value to a field that already contains one.
+- If a profile value has no clearly-labeled destination on this form, skip it. Do not place it in a related field.
 - Prefer selects and radios that match the values above; otherwise choose the closest reasonable option.
-- Try to answer all the questions; if unsure, make a reasonable guess.
+- For form questions whose answer isn't in the profile, make a reasonable guess. (This applies to questions, not to profile values without a matching field.)
 - For longer fields, write a few sentences consistent with the profile.
 {upload_rule}
 - Do not click Submit, Apply, Send, or any control that finalises the application.
@@ -600,7 +602,7 @@ Rules:
         available_file_paths=attachments or None,
         use_judge=False,
         use_vision=False,
-        max_actions_per_step=10,
+        max_actions_per_step=3,
     )
     _capture("form_fill_started", {
         "provider": provider,
@@ -852,7 +854,7 @@ def cli() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="AI-powered form autofill")
     parser.add_argument("command", nargs="?", default=None,
-                        help="URL of the form to fill, or 'uninstall'")
+                        help="URL of the form to fill, 'setup', or 'uninstall'")
     parser.add_argument(
         "--provider",
         choices=["anthropic", "openai", "browseruse"],
@@ -863,6 +865,10 @@ def cli() -> None:
 
     if args.command == "uninstall":
         _uninstall()
+        return
+
+    if args.command == "setup":
+        _onboard()
         return
 
     needs_setup = not _has_profile_content() or not _has_any_api_key()
@@ -876,6 +882,7 @@ def cli() -> None:
                 f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
                 "",
                 "Usage: [bold]autofill <url>[/]",
+                "Reconfigure: [bold]autofill setup[/]",
             ))
         return
 
@@ -888,7 +895,7 @@ def cli() -> None:
 
     if needs_setup:
         console.print(
-            "[err]Not set up yet.[/] Run [bold]autofill[/] first, then [bold]autofill <url>[/]."
+            "[err]Not set up yet.[/] Run [bold]autofill setup[/] first, then [bold]autofill <url>[/]."
         )
         raise SystemExit(1)
 
