@@ -50,9 +50,9 @@ The first time you run it, autofill walks you through:
 
 | Provider | Key env var | Notes |
 |---|---|---|
-| Browser Use | `BROWSER_USE_API_KEY` | Default — cheapest, no extra config |
+| Browser Use | `BROWSER_USE_API_KEY` | Default — managed, no extra setup |
 | OpenAI | `OPENAI_API_KEY` | Uses `gpt-4o` |
-| Anthropic | `ANTHROPIC_API_KEY` | Uses `claude-sonnet-4-20250514` |
+| Anthropic | `ANTHROPIC_API_KEY` | Uses `claude-sonnet-4-6` |
 
 ### Fill a form
 
@@ -86,8 +86,12 @@ autofill uninstall
 
 Your profile and documents never leave your machine — autofill reads them locally and passes them directly to the LLM you configured.
 
-autofill collects **anonymous** usage events (tool version, OS, LLM provider, whether a run completed) to help prioritise development. No personal data, no form content, no URLs. To opt out:
+autofill collects **anonymous** usage events (tool version, OS, LLM provider, whether a run completed) to help prioritize development. No personal data, no form content, no URLs. To opt out:
 
 ```bash
-echo "AUTOFILL_TELEMETRY=0" >> .env
+echo "AUTOFILL_TELEMETRY=0" >> ~/autofill/.env
 ```
+
+## Contributing
+
+Found a bug or have a feature idea? [Open an issue](https://github.com/jayzuccarelli/autofill/issues). PRs welcome — see [`AGENTS.md`](AGENTS.md) for architecture and conventions. MIT licensed.
