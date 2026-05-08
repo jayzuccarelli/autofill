@@ -104,4 +104,4 @@ Then open a new terminal.
 
 ## Contributing
 
-Found a bug or have a feature idea? [Open an issue](https://github.com/jayzuccarelli/autofill/issues). PRs welcome — see [`AGENTS.md`](AGENTS.md) for architecture and conventions. MIT licensed.
+Found a bug or have a feature idea? [Open an issue](https://github.com/jayzuccarelli/autofill/issues) — there are templates for both. PRs welcome; start with [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup and [`AGENTS.md`](AGENTS.md) for architecture. MIT licensed.
