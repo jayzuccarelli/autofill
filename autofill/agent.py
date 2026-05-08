@@ -663,8 +663,6 @@ Rules:
             except Exception as exc:
                 console.print(f"[err]Warning:[/] Could not track field changes: {exc}")
 
-        print("\a", end="", flush=True)
-
         corrections = {
             k: {"agent": agent_snapshot.get(k, ""), "user": v}
             for k, v in user_snapshot.items()
@@ -725,7 +723,7 @@ def _onboard_profile() -> None:
     console.print("I need some info to fill forms on your behalf.\n", style="info")
 
     name = _ask("Full name")
-    dob = _ask("Date of birth (MM/DD/YYYY, or Enter to skip)")
+    dob = _ask("Date of birth (YYYY-MM-DD, or Enter to skip)")
     email = _ask("Email")
     phone = _ask("Phone (or Enter to skip)")
     location = _ask("Location (City, Country)")
@@ -872,30 +870,30 @@ def _uninstall() -> None:
 
     targets = [p for p in (install_dir, wrapper) if p.exists() or p.is_symlink()]
     if not targets:
-        print(
-            "Nothing to uninstall: no install found at ~/autofill or"
+        console.print(
+            "[info]Nothing to uninstall:[/] no install found at ~/autofill or"
             " ~/.local/bin/autofill."
         )
         return
 
-    print("\033[1;31mThis will delete:\033[0m")
+    console.print("[err]This will delete:[/]")
     for p in targets:
-        print(f"  {p}")
+        console.print(f"  {p}")
     if install_dir in targets:
-        print("(including your profile and knowledge files)")
+        console.print("[dim](including your profile and knowledge files)[/]")
 
     confirm = questionary.confirm(
         "Are you sure?", default=False, style=_Q_STYLE
     ).ask()
     if not confirm:
-        print("Cancelled.")
+        console.print("[info]Cancelled.[/]")
         return
 
     if wrapper.exists() or wrapper.is_symlink():
         wrapper.unlink()
     if install_dir.exists():
         shutil.rmtree(install_dir)
-    print("\u2713 autofill uninstalled.")
+    console.print("[success]\u2713[/] autofill uninstalled.")
 
 
 def cli() -> None:
