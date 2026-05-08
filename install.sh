@@ -29,19 +29,25 @@ cd "$project_dir" && exec uv run autofill "\$@"
 WRAPPER
   chmod +x "$link_dir/autofill"
 
-  # Ensure ~/.local/bin is on PATH in the user's shell rc
+  # Ensure ~/.local/bin is on PATH in the user's shell rc.
+  # macOS Terminal.app launches login shells (sources .bash_profile);
+  # Linux interactive terminals usually source .bashrc instead.
   local current_shell
   current_shell="$(basename "${SHELL:-/bin/bash}")"
-  local rc
+  local rc_files=()
   if [[ "$current_shell" == "zsh" ]]; then
-    rc="${HOME}/.zshrc"
+    rc_files=("${HOME}/.zshrc")
+  elif [[ "$(uname -s)" == "Darwin" ]]; then
+    rc_files=("${HOME}/.bash_profile")
   else
-    rc="${HOME}/.bash_profile"
+    rc_files=("${HOME}/.bashrc" "${HOME}/.profile")
   fi
-  touch "$rc"
-  if ! grep -q '\.local/bin' "$rc" 2>/dev/null; then
-    printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc"
-  fi
+  for rc in "${rc_files[@]}"; do
+    touch "$rc"
+    if ! grep -q '\.local/bin' "$rc" 2>/dev/null; then
+      printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc"
+    fi
+  done
 }
 
 install_uv
