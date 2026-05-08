@@ -57,13 +57,15 @@ The first time you run it, autofill walks you through:
 ### Fill a form
 
 ```bash
-autofill https://jobs.example.com/apply
+autofill "https://jobs.example.com/apply"
 ```
 
 The agent opens a browser, fills the form, and leaves it open for you to review and submit.
 
+> **Always wrap the URL in quotes.** Bare URLs with `?` or `&` are interpreted by the shell — `&` backgrounds the command and your URL gets truncated. Quoting hands the full URL to autofill verbatim.
+
 ```bash
-autofill --provider anthropic https://jobs.example.com/apply  # override provider
+autofill --provider anthropic "https://jobs.example.com/apply?ref=xyz"  # override provider
 ```
 
 ### Uninstall
@@ -84,13 +86,20 @@ autofill uninstall
 
 ## Privacy & telemetry
 
-Your profile and documents never leave your machine — autofill reads them locally and passes them directly to the LLM you configured.
+Your profile and documents stay on your machine — autofill reads them locally and stores corrections locally. Relevant excerpts are sent to the LLM provider you configured (Browser Use, OpenAI, or Anthropic) so it can fill in form fields; that content is subject to your provider's data-handling policy. Passwords, SSNs, and similar sensitive fields are stripped before any corrections are saved.
 
-autofill collects **anonymous** usage events (tool version, OS, LLM provider, whether a run completed) to help prioritize development. No personal data, no form content, no URLs. To opt out:
+autofill collects **anonymous** usage events (tool version, OS, LLM provider, whether a run completed) to help prioritize development. No personal data, no form content, no URLs. To opt out, set `AUTOFILL_TELEMETRY=0` in your shell:
 
 ```bash
-echo "AUTOFILL_TELEMETRY=0" >> ~/autofill/.env
+# zsh
+echo 'export AUTOFILL_TELEMETRY=0' >> ~/.zshrc
+# bash (Linux)
+echo 'export AUTOFILL_TELEMETRY=0' >> ~/.bashrc
+# bash (macOS)
+echo 'export AUTOFILL_TELEMETRY=0' >> ~/.bash_profile
 ```
+
+Then open a new terminal.
 
 ## Contributing
 

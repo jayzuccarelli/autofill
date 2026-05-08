@@ -20,10 +20,15 @@ import uuid
 from pathlib import Path
 
 # ── PostHog setup ────────────────────────────────────────────────────────────
-# Replace the placeholder below with your Project API key from
-# https://posthog.com (free tier is fine).
-_POSTHOG_KEY = "REPLACE_WITH_YOUR_POSTHOG_KEY"
+# Public PostHog Project API key — write-only, safe to commit.
+# Users opt out via AUTOFILL_TELEMETRY=0.
+_POSTHOG_KEY = "phc_nrQoCoVSPLxMjGfXNXSjsBuXRdpGFnV9CuD6BYRahruy"
 _POSTHOG_HOST = "https://us.i.posthog.com"
+# Hard cap on events per CLI invocation — guards against runaway loops
+# inflating event volume from a single install.
+_MAX_EVENTS_PER_PROCESS = 25
+_event_count = 0
+_event_count_lock = threading.Lock()
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -52,6 +57,11 @@ def track(event: str, properties: dict | None = None) -> None:
     """Fire-and-forget telemetry ping.  Never raises, never blocks the caller."""
     if not _enabled():
         return
+    global _event_count
+    with _event_count_lock:
+        if _event_count >= _MAX_EVENTS_PER_PROCESS:
+            return
+        _event_count += 1
     threading.Thread(
         target=_send,
         args=(event, properties or {}),
