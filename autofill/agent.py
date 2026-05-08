@@ -910,6 +910,9 @@ def cli() -> None:
         default=None,
         help="LLM provider (auto-detected from API key if omitted)",
     )
+    parser.add_argument(
+        "--version", action="version", version=f"autofill {_VERSION}"
+    )
     args = parser.parse_args()
 
     if args.command == "uninstall":
