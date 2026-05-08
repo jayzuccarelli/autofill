@@ -48,8 +48,13 @@ class Config:
     upsert_batch: int = 50
     max_text_chars: int = 100_000
 
-    # Retrieval
-    retrieval_query: str = "contact identity address work experience"
+    # Retrieval — natural-language query so Chroma's embedding model
+    # surfaces a wide cross-section of the profile, not just contact basics.
+    retrieval_query: str = (
+        "personal contact information, home address, education, work history, "
+        "skills, languages, work authorization and visa status, salary "
+        "expectations, demographics, references, certifications, projects"
+    )
     retrieval_n: int = 10
 
     # Models — bump these when upgrading provider SDKs
@@ -61,6 +66,7 @@ class Config:
 
     # Agent
     agent_timeout: int = 600  # seconds before agent.run() is cancelled
+    agent_max_steps: int = 50  # LLM turns; one turn = read DOM + 1-3 actions
 
 
 cfg = Config()
@@ -612,7 +618,16 @@ Rules:
 - Try to answer all the questions; if unsure, make a reasonable guess.
 - For longer fields, write a few sentences consistent with the profile.
 {upload_rule}
-- Do not click Submit, Apply, Send, or any control that finalises the application.
+- Multi-step forms: clicking "Next", "Continue", "Save and continue", or
+  similar between-step buttons IS allowed — that's how you reach the next
+  page of fields.
+- What is FORBIDDEN is the FINAL action that submits the application:
+  buttons like "Submit", "Submit application", "Apply", "Send application",
+  "Finish", or anything similar that finalises and sends the form. When you
+  reach that final button, STOP and finish with the done action.
+- If the page shows a login form, sign-in wall, or CAPTCHA, do NOT try to
+  fill it. Stop with the done action and tell the user the page needs
+  manual sign-in or a captcha solve before autofill can run.
 - When everything reasonable is filled, finish with the done action and tell
   the user to review and submit manually.
 """
