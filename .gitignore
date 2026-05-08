@@ -203,6 +203,9 @@ knowledge/*
 .autofill_install_id
 posthog-setup-report.md
 
+# Per-machine Claude Code settings
+.claude/settings.local.json
+
 # PyPI configuration file
 .pypirc
 

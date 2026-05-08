@@ -6,14 +6,13 @@ import json
 import os
 import re
 from dataclasses import dataclass
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from urllib.parse import urlparse
 
 import browser_use as bu
 import chromadb
 import questionary
-from autofill.telemetry import track as _capture
 from dotenv import load_dotenv
 from rich.console import Console
 from rich.progress import (
@@ -27,6 +26,9 @@ from rich.rule import Rule
 from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
+
+from autofill.telemetry import track as _capture
+
 
 @dataclass(frozen=True)
 class Config:
@@ -63,7 +65,7 @@ class Config:
 
 cfg = Config()
 
-# Attachable document types (not .md/.txt — those are indexed as text, not file-input bytes).
+# Attachable document types (not .md/.txt — those are indexed as text, not bytes).
 _ATTACHABLE_SUFFIXES = frozenset({".pdf", ".doc", ".docx"})
 # Legacy .doc (1997-2003 OLE binary) has no viable pure-Python parser; we skip
 # it during ingestion but still allow it as an upload attachment.
@@ -120,14 +122,15 @@ _D = "rgb(42,24,69)"      # glasses frame
 _W = "white"
 _P = "rgb(26,26,46)"      # pupil
 
+# Pixel-art markup below; wrapping would break the rendered layout.
 _LOGO_LINES = [
-    f" [{_L}]▄[/][{_B}]▄[/][{_L} on {_B}]▀[/][{_B}]████████████[/][{_L} on {_B}]▀[/][{_B}]▄[/][{_L}]▄[/] ",
-    f" [{_B}]██[/][{_D}]█[/][{_D} on {_W}]▀▀▀[/][{_D}]█[/][{_B}]████[/][{_D}]█[/][{_D} on {_W}]▀▀▀[/][{_D}]█[/][{_B}]██[/] ",
-    f" [{_B}]██[/][{_D}]█[/][{_W}]█[/][{_P} on {_W}]▀[/][{_W}]█[/][{_D}]█[/][{_D} on {_B}]▀▀▀▀[/][{_D}]█[/][{_W}]█[/][{_P} on {_W}]▀[/][{_W}]█[/][{_D}]█[/][{_B}]██[/] ",
-    f" [{_B} on {_L}]▀[/][{_B}]█[/][{_D} on {_B}]▀▀▀▀▀[/][{_B}]████[/][{_D} on {_B}]▀▀▀▀▀[/][{_B}]█[/][{_B} on {_L}]▀[/] ",
-    f"  [{_L} on {_B}]▀[/][{_L}]▀[/][{_L} on {_B}]▀[/][{_L}]▀[/][{_L} on {_B}]▀[/][{_L}]▀[/][{_L} on {_B}]▀[/][{_L}]▀▀[/][{_L} on {_B}]▀[/][{_L}]▀[/][{_L} on {_B}]▀[/][{_L}]▀[/][{_L} on {_B}]▀[/][{_L}]▀[/][{_L} on {_B}]▀[/]  ",
+    f" [{_L}]▄[/][{_B}]▄[/][{_L} on {_B}]▀[/][{_B}]████████████[/][{_L} on {_B}]▀[/][{_B}]▄[/][{_L}]▄[/] ",  # noqa: E501
+    f" [{_B}]██[/][{_D}]█[/][{_D} on {_W}]▀▀▀[/][{_D}]█[/][{_B}]████[/][{_D}]█[/][{_D} on {_W}]▀▀▀[/][{_D}]█[/][{_B}]██[/] ",  # noqa: E501
+    f" [{_B}]██[/][{_D}]█[/][{_W}]█[/][{_P} on {_W}]▀[/][{_W}]█[/][{_D}]█[/][{_D} on {_B}]▀▀▀▀[/][{_D}]█[/][{_W}]█[/][{_P} on {_W}]▀[/][{_W}]█[/][{_D}]█[/][{_B}]██[/] ",  # noqa: E501
+    f" [{_B} on {_L}]▀[/][{_B}]█[/][{_D} on {_B}]▀▀▀▀▀[/][{_B}]████[/][{_D} on {_B}]▀▀▀▀▀[/][{_B}]█[/][{_B} on {_L}]▀[/] ",  # noqa: E501
+    f"  [{_L} on {_B}]▀[/][{_L}]▀[/][{_L} on {_B}]▀[/][{_L}]▀[/][{_L} on {_B}]▀[/][{_L}]▀[/][{_L} on {_B}]▀[/][{_L}]▀▀[/][{_L} on {_B}]▀[/][{_L}]▀[/][{_L} on {_B}]▀[/][{_L}]▀[/][{_L} on {_B}]▀[/][{_L}]▀[/][{_L} on {_B}]▀[/]  ",  # noqa: E501
     f"[{_B}]▄▀▄▀▄▀▄▀[/]    [{_B}]▀▄▀▄▀▄▀▄[/]",
-    f"[{_L}]▀[/] [{_L}]▀[/] [{_L}]▀[/] [{_L}]▀[/]      [{_L}]▀[/] [{_L}]▀[/] [{_L}]▀[/] [{_L}]▀[/]",
+    f"[{_L}]▀[/] [{_L}]▀[/] [{_L}]▀[/] [{_L}]▀[/]      [{_L}]▀[/] [{_L}]▀[/] [{_L}]▀[/] [{_L}]▀[/]",  # noqa: E501
 ]
 
 
@@ -264,8 +267,9 @@ def ingest() -> None:
     for path in visible_files:
         if path.suffix.lower() in _UNPARSEABLE_SUFFIXES:
             console.print(
-                f"[yellow]Warning:[/] [bold]{path.name}[/] is a legacy .doc file — "
-                "its content won't be indexed. Resave as .docx or PDF to make it searchable."
+                f"[yellow]Warning:[/] [bold]{path.name}[/] is a legacy .doc file"
+                " — its content won't be indexed. Resave as .docx or PDF to make"
+                " it searchable."
             )
     current_files = {
         path.name: path
@@ -279,7 +283,9 @@ def ingest() -> None:
 
     # Add new or re-ingest modified files
     hashes = {f: _hash(p) for f, p in current_files.items()}
-    to_ingest = {f: p for f, p in current_files.items() if stored_hashes.get(f) != hashes[f]}
+    to_ingest = {
+        f: p for f, p in current_files.items() if stored_hashes.get(f) != hashes[f]
+    }
     if not to_ingest:
         return
 
@@ -296,7 +302,10 @@ def ingest() -> None:
             h = hashes[fname]
             chunks = _chunk_text(_read(path))
             if not chunks:
-                console.print(f"[yellow]Warning:[/] [bold]{fname}[/] produced no text chunks — skipping.")
+                console.print(
+                    f"[yellow]Warning:[/] [bold]{fname}[/] produced no text "
+                    "chunks — skipping."
+                )
                 progress.advance(task_id)
                 continue
             if fname in stored_ids:
@@ -314,7 +323,7 @@ def ingest() -> None:
 
 
 def retrieve(query: str, n: int = cfg.retrieval_n) -> str:
-    """Query the Chroma collection and return the top-*n* chunks joined by blank lines."""
+    """Query Chroma and return the top-*n* chunks joined by blank lines."""
     col = _client().get_or_create_collection(cfg.collection)
     results = col.query(query_texts=[query], n_results=n)
     docs: list[str] = results["documents"][0]  # type: ignore[index]
@@ -324,10 +333,10 @@ def retrieve(query: str, n: int = cfg.retrieval_n) -> str:
 def _attachment_paths() -> list[str]:
     """Paths browser-use may pass to ``<input type="file">``.
 
-    Includes every PDF/DOC/DOCX in ``knowledge/`` (same visibility rules as ``ingest``).
-    There is **no** basename pattern or "resume" substring — only the suffix allowlist.
-    Which path belongs to which upload field is decided by the agent from **form labels**,
-    not from matching strings in filenames.
+    Includes every PDF/DOC/DOCX in ``knowledge/`` (same visibility rules as
+    ``ingest``). There is **no** basename pattern or "resume" substring — only
+    the suffix allowlist. Which path belongs to which upload field is decided
+    by the agent from **form labels**, not from matching strings in filenames.
     """
     if not cfg.knowledge_dir.is_dir():
         return []
@@ -352,7 +361,9 @@ def _llm(provider: str) -> object:
         return ChatOpenAI(model=cfg.openai_model)
     if provider == "browseruse":
         return bu.ChatBrowserUse()
-    raise ValueError(f"Unknown provider '{provider}'. Choose: anthropic, openai, browseruse")
+    raise ValueError(
+        f"Unknown provider '{provider}'. Choose: anthropic, openai, browseruse"
+    )
 
 
 _FORM_TAGS = frozenset({"input", "textarea", "select"})
@@ -409,7 +420,11 @@ async def _snapshot_fields(session) -> dict:
                     continue
 
                 seen_counts[label] = seen_counts.get(label, 0) + 1
-                key = label if seen_counts[label] == 1 else f"{label} ({seen_counts[label]})"
+                key = (
+                    label
+                    if seen_counts[label] == 1
+                    else f"{label} ({seen_counts[label]})"
+                )
 
                 # Read live value via CDP.
                 value = await _read_live_value(cdp_session, node.backend_node_id, role)
@@ -438,7 +453,8 @@ async def _read_live_value(cdp_session, backend_node_id: int, role: str) -> str 
             # use the aria-checked attribute instead.
             fn = (
                 "function() {"
-                "  if (typeof this.checked === 'boolean') return this.checked ? 'true' : 'false';"
+                "  if (typeof this.checked === 'boolean')"
+                "    return this.checked ? 'true' : 'false';"
                 "  var ac = this.getAttribute('aria-checked');"
                 "  if (ac) return ac;"
                 "  return 'false';"
@@ -497,7 +513,7 @@ async def _poll_fields(session, snapshot: dict, interval: float = 1.0,
 
 
 def _load_corrections(url: str) -> str:
-    """Return previously saved corrections for this domain, formatted for the task prompt."""
+    """Return saved corrections for this domain, formatted for the task prompt."""
     if not cfg.corrections_file.exists():
         return ""
     domain = urlparse(url).netloc
@@ -540,7 +556,7 @@ def _save_corrections(url: str, corrections: dict) -> None:
     if not safe:
         return
     entry = {
-        "timestamp": datetime.now(timezone.utc).isoformat(),
+        "timestamp": datetime.now(UTC).isoformat(),
         "url": url,
         "domain": urlparse(url).netloc,
         "corrections": safe,
@@ -555,21 +571,25 @@ async def main(url: str, provider: str) -> None:
     profile = retrieve(cfg.retrieval_query)
     if not profile.strip():
         raise SystemExit(
-            "No profile in the knowledge store. Add one or more files under knowledge/ "
-            "(e.g. knowledge/profile.md — see README), run from the project root, then try again."
+            "No profile in the knowledge store. Add one or more files under"
+            " knowledge/ (e.g. knowledge/profile.md — see README), run from the"
+            " project root, then try again."
         )
 
     attachments = _attachment_paths()
     if attachments:
         _capture("file_attachments_found", {"attachment_count": len(attachments)})
         upload_rule = (
-            "- For each file upload, read the field label on the page; choose one path from "
-            f"this list that fits that label (CV vs cover letter vs other document): {attachments}.\n"
-            "- Do not upload passport/license/ID scans unless required; skip if unsure."
+            "- For each file upload, read the field label on the page; choose"
+            " one path from this list that fits that label (CV vs cover letter"
+            f" vs other document): {attachments}.\n"
+            "- Do not upload passport/license/ID scans unless required; skip if"
+            " unsure."
         )
     else:
         upload_rule = (
-            "- Do not upload real identity documents; skip file uploads requiring real files."
+            "- Do not upload real identity documents; skip file uploads"
+            " requiring real files."
         )
 
     prior_corrections = _load_corrections(url)
@@ -582,12 +602,14 @@ loosely — e.g. "Phone" = telephone):
 {profile}
 {corrections_section}
 Rules:
-- Prefer selects and radios that match the values above; otherwise choose the closest reasonable option.
+- Prefer selects and radios that match the values above; otherwise choose the
+  closest reasonable option.
 - Try to answer all the questions; if unsure, make a reasonable guess.
 - For longer fields, write a few sentences consistent with the profile.
 {upload_rule}
 - Do not click Submit, Apply, Send, or any control that finalises the application.
-- When everything reasonable is filled, finish with the done action and tell the user to review and submit manually.
+- When everything reasonable is filled, finish with the done action and tell
+  the user to review and submit manually.
 """
 
     llm = _llm(provider)
@@ -621,9 +643,15 @@ Rules:
         )
     try:
         if not timed_out:
-            _capture("form_fill_completed", {"provider": provider, "has_attachments": bool(attachments)})
-        # Snapshot what the agent filled, then poll for user edits until submit/navigate.
-        console.print("\n[info]Capturing form state — please review and submit in the browser.[/]")
+            _capture(
+                "form_fill_completed",
+                {"provider": provider, "has_attachments": bool(attachments)},
+            )
+        # Snapshot what the agent filled, then poll for user edits until submit.
+        console.print(
+            "\n[info]Capturing form state — please review and submit in the"
+            " browser.[/]"
+        )
         agent_snapshot: dict = {}
         user_snapshot: dict = {}
         if agent.browser_session is not None:
@@ -645,9 +673,13 @@ Rules:
         if corrections:
             _save_corrections(url, corrections)
             _capture("corrections_saved", {"correction_count": len(corrections)})
-            console.print(f"[info]Saved {len(corrections)} correction(s) for next time.[/]")
+            console.print(
+                f"[info]Saved {len(corrections)} correction(s) for next time.[/]"
+            )
 
-        console.print("[info]Tracking complete — browser stays open for you to submit.[/]")
+        console.print(
+            "[info]Tracking complete — browser stays open for you to submit.[/]"
+        )
     finally:
         # Always tear down event buses and watchdogs (keeps the browser window open).
         if agent.browser_session is not None:
@@ -658,7 +690,7 @@ Rules:
 
 
 def _has_profile_content() -> bool:
-    """True if knowledge/ has at least one non-hidden, non-example file with real content."""
+    """True if knowledge/ has a non-hidden, non-example file with real content."""
     if not cfg.knowledge_dir.is_dir():
         return False
     for p in sorted(cfg.knowledge_dir.iterdir()):
@@ -733,12 +765,29 @@ def _onboard_profile() -> None:
 
 
 def _onboard_api_key() -> None:
-    """Prompt for an LLM API key if none is set, letting the user pick a provider."""
-    if _has_any_api_key():
-        return
-
+    """Prompt for an LLM API key, confirming any auto-detected one before use."""
     console.print()
     console.print(Rule("API key", style="accent"))
+
+    detected = _detect_provider()
+    if detected:
+        detected_label = _PROVIDERS[detected]["label"].split(" (")[0]
+        console.print(
+            f"\n  Detected [accent]{detected_label}[/] API key in your environment.\n"
+        )
+        keep = questionary.confirm(
+            f"Use {detected_label}?", default=True, style=_Q_STYLE
+        ).ask()
+        if keep:
+            if os.environ.get("AUTOFILL_PROVIDER") != detected:
+                with open(cfg.env_file, "a") as f:
+                    f.write(f"AUTOFILL_PROVIDER={detected}\n")
+                cfg.env_file.chmod(0o600)
+                os.environ["AUTOFILL_PROVIDER"] = detected
+            _capture("api_key_configured", {"provider": detected, "source": "detected"})
+            console.print(f"[success]✓[/] Using {detected_label}.\n")
+            return
+        console.print()
 
     names = list(_PROVIDERS)
     choices = [
@@ -808,11 +857,14 @@ def _onboard() -> None:
             "No profile content found after indexing. "
             "Add info to knowledge/profile.md and run autofill again."
         )
-    console.print("[success]✓[/] Setup complete. Run [bold]autofill <url>[/] to fill a form.\n")
+    console.print(
+        "[success]✓[/] Setup complete. Run [bold]autofill <url>[/] to fill a"
+        " form.\n"
+    )
 
 
 def _uninstall() -> None:
-    """Remove the autofill wrapper script and install directory after user confirmation."""
+    """Remove the wrapper script and install directory after user confirmation."""
     import shutil
 
     install_dir = Path.home() / "autofill"
@@ -820,7 +872,10 @@ def _uninstall() -> None:
 
     targets = [p for p in (install_dir, wrapper) if p.exists() or p.is_symlink()]
     if not targets:
-        print("Nothing to uninstall: no install found at ~/autofill or ~/.local/bin/autofill.")
+        print(
+            "Nothing to uninstall: no install found at ~/autofill or"
+            " ~/.local/bin/autofill."
+        )
         return
 
     print("\033[1;31mThis will delete:\033[0m")
@@ -844,7 +899,7 @@ def _uninstall() -> None:
 
 
 def cli() -> None:
-    """Entry point: parse arguments and dispatch to onboarding, status display, or form fill."""
+    """Parse arguments and dispatch to onboarding, status, or form fill."""
     os.chdir(Path(__file__).resolve().parent.parent)
     load_dotenv()
     import argparse
@@ -877,24 +932,29 @@ def cli() -> None:
             ))
         return
 
-    from urllib.parse import urlparse
     parsed = urlparse(args.command)
     if parsed.scheme not in ("http", "https"):
         raise SystemExit(
-            f"Invalid URL '{args.command}'. Please provide a URL starting with http:// or https://"
+            f"Invalid URL '{args.command}'. Please provide a URL starting with"
+            " http:// or https://"
         )
 
     if needs_setup:
         console.print(
-            "[err]Not set up yet.[/] Run [bold]autofill[/] first, then [bold]autofill <url>[/]."
+            "[err]Not set up yet.[/] Run [bold]autofill[/] first, then"
+            " [bold]autofill <url>[/]."
         )
         raise SystemExit(1)
 
     provider = args.provider or _detect_provider() or "browseruse"
+    provider_label = _PROVIDERS[provider]["label"].split(" (")[0]
     _capture("cli_invoked", {"provider": provider, "version": _VERSION})
 
     console.print()
-    console.print(_banner(f"[bold]autofill[/]  [dim]v{_VERSION}[/]"))
+    console.print(_banner(
+        f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
+        f"[dim]Provider:[/] [accent]{provider_label}[/]",
+    ))
     console.print()
     ingest()
     asyncio.run(main(args.command, provider))
