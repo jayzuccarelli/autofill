@@ -83,6 +83,7 @@ autofill uninstall
 - Run `autofill` again any time to re-run setup if something is missing
 - Edit `knowledge/profile.md` or add files to `knowledge/` to update your info; the database re-indexes on each run
 - Any `.pdf`, `.doc`, or `.docx` in `knowledge/` is offered to the agent for file-upload fields; it picks which file matches which upload based on form labels
+- `knowledge/` and `.env` always live inside the install directory (`~/autofill/` by default), regardless of where you run `autofill` from
 
 ## Privacy & telemetry
 
