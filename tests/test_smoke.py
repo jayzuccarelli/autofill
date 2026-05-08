@@ -45,7 +45,11 @@ class TestSensitiveFieldRegex:
         "field",
         ["password", "Password", "PASSWORD", "passcode", "otp", "pin",
          "ssn", "cvv", "cvc", "secret", "passport", "dob",
-         "card_number", "cardnumber", "card-number"],
+         "card_number", "cardnumber", "card-number",
+         # Underscore-separated forms — these were silently slipping
+         # through under the old \b regex because _ is a word char.
+         "password_field", "auth_token", "account_number", "bank_routing",
+         "social_security", "passport_no", "date_of_birth"],
     )
     def test_matches_sensitive(self, field):
         assert _SENSITIVE_FIELD_RE.search(field), f"expected match: {field!r}"

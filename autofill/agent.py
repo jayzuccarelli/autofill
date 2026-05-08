@@ -539,9 +539,14 @@ def _load_corrections(url: str) -> str:
     return "\n".join(lines)
 
 
+# Lookarounds (not \b) so '_' acts as a separator — `\w` includes underscore,
+# which would otherwise let `password_field` and `auth_token` slip through.
 _SENSITIVE_FIELD_RE = re.compile(
-    r"\b(password|passcode|otp|pin|2fa|ssn|social.?sec|cvv|cvc|card.?num|card.?number"
-    r"|expir|exp_|secret|token|auth|passport|birth|dob|bank|routing|account.?num)\b",
+    r"(?<![A-Za-z0-9])"
+    r"(password|passcode|otp|pin|2fa|ssn|social.?sec(?:urity)?|cvv|cvc"
+    r"|card.?num(?:ber)?|expir|exp_|secret|token|auth|passport|birth|dob"
+    r"|bank|routing|account.?num(?:ber)?)"
+    r"(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
 
