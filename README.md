@@ -76,6 +76,24 @@ autofill uninstall
 
 ---
 
+## What works best
+
+autofill is designed for forms that don't require sign-in. It's been tested with:
+
+- **Greenhouse** (`*.greenhouse.io`)
+- **Lever** (`jobs.lever.co`)
+- **Ashby** (`jobs.ashbyhq.com`)
+- **Workable** (`apply.workable.com`)
+- Generic single-page HTML forms (Google Forms, Typeform, etc.)
+
+### Known limitations
+
+- **Login walls** — autofill opens the URL and starts filling immediately. It won't pause for you to sign in. Sites that require an account before showing the form (Workday, iCIMS, LinkedIn Easy Apply, Indeed) won't work in this version; the agent will detect the login form and stop rather than try to fill it.
+- **CAPTCHAs** — Cloudflare challenges, reCAPTCHA, and similar bot checks halt the agent. The browser stays open so you can solve them manually, but the agent won't resume automatically.
+- **Very long multi-step apps** — supported up to ~50 LLM steps (configurable in `Config.agent_max_steps`); longer applications may exhaust the budget before reaching the final review screen.
+
+---
+
 ## Notes
 
 - The agent will **not** click Submit — you always review first
