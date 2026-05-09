@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 import re
+import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
@@ -634,13 +635,26 @@ Rules:
 
     llm = _llm(provider)
     browser_profile = bu.BrowserProfile(keep_alive=True, headless=False)
+
+    # Step-level progress so users have proof of life during long runs.
+    # We can't predict total duration; show the live counter and elapsed time.
+    run_start = time.monotonic()
+
+    def _on_step(_state, _output, step_n: int) -> None:
+        elapsed = int(time.monotonic() - run_start)
+        console.print(
+            f"[dim]autofill › step {step_n}/{cfg.agent_max_steps}"
+            f" · {elapsed}s elapsed[/]"
+        )
+
     agent = bu.Agent(
         task=task,
         llm=llm,
         browser_profile=browser_profile,
         initial_actions=[{"navigate": {"url": url, "new_tab": False}}],
         available_file_paths=attachments or None,
-        use_judge=False,
+        use_judge=True,
+        register_new_step_callback=_on_step,
     )
     _capture("form_fill_started", {
         "provider": provider,
@@ -650,7 +664,7 @@ Rules:
     timed_out = False
     try:
         async with asyncio.timeout(cfg.agent_timeout):
-            await agent.run(max_steps=15)
+            await agent.run(max_steps=cfg.agent_max_steps)
     except TimeoutError:
         timed_out = True
         _capture("form_fill_timed_out", {
