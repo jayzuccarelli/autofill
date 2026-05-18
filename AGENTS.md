@@ -12,8 +12,8 @@ Instructions for coding agents (Cursor, Copilot, Devin, etc.) working on **autof
 ## Setup
 
 - **Package manager:** [uv](https://docs.astral.sh/uv/). Install deps: `uv sync` (lockfile: [`uv.lock`](uv.lock)).
-- **LLM providers:** Browser Use (default), OpenAI, and Anthropic are all supported out of the box — the `openai` and `anthropic` SDKs ship as browser-use transitive deps, so no extras to install.
-- **Secrets:** `.env` in repo root (gitignored). `load_dotenv()` runs at start of `cli()`. Needs one of: `BROWSER_USE_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`. Onboarding prompts the user to pick a provider. `AUTOFILL_PROVIDER` (also in `.env`) records the choice; `--provider` flag or auto-detection from available keys also works.
+- **LLM providers:** Browser Use (default), Anthropic, and OpenAI are all supported out of the box — the `anthropic` and `openai` SDKs ship as browser-use transitive deps, so no extras to install.
+- **Secrets:** `.env` in repo root (gitignored). `load_dotenv()` runs at start of `cli()`. Needs one of: `BROWSER_USE_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`. Onboarding prompts the user to pick a provider. `AUTOFILL_PROVIDER` (also in `.env`) records the choice; `--provider` flag or auto-detection from available keys also works.
 - **One-shot install for humans:** [`install.sh`](install.sh) + see [README.md](README.md).
 
 ## Run
