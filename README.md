@@ -51,8 +51,8 @@ The first time you run it, autofill walks you through:
 | Provider | Key env var | Notes |
 |---|---|---|
 | Browser Use | `BROWSER_USE_API_KEY` | Default — managed, no extra setup |
-| OpenAI | `OPENAI_API_KEY` | Uses `gpt-4o` |
 | Anthropic | `ANTHROPIC_API_KEY` | Uses `claude-sonnet-4-6` |
+| OpenAI | `OPENAI_API_KEY` | Uses `gpt-4o` |
 
 ### Fill a form
 
