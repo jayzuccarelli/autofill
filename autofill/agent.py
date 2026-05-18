@@ -757,6 +757,7 @@ def _onboard_profile() -> None:
     console.print("I need some info to fill forms on your behalf.\n", style="info")
 
     name = _ask("Full name")
+    preferred = _ask("Preferred Name (or Enter to skip)")
     dob = _ask("Date of birth (YYYY-MM-DD, or Enter to skip)")
     email = _ask("Email")
     phone = _ask("Phone (or Enter to skip)")
@@ -768,6 +769,8 @@ def _onboard_profile() -> None:
 
     lines = [f"# {name}\n"]
     lines.append(f"- **Full name:** {name}")
+    if preferred:
+        lines.append(f"- **Preferred Name:** {preferred}")
     if dob:
         lines.append(f"- **Date of birth:** {dob}")
     if email:
