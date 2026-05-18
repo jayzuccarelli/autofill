@@ -84,15 +84,15 @@ _PROVIDERS: dict[str, dict[str, str]] = {
         "label": "Browser Use (default — cheapest, no extra deps)",
         "url": "https://cloud.browser-use.com/settings?tab=api-keys&new=1",
     },
-    "openai": {
-        "env": "OPENAI_API_KEY",
-        "label": "OpenAI",
-        "url": "https://platform.openai.com/api-keys",
-    },
     "anthropic": {
         "env": "ANTHROPIC_API_KEY",
         "label": "Anthropic",
         "url": "https://console.anthropic.com/settings/keys",
+    },
+    "openai": {
+        "env": "OPENAI_API_KEY",
+        "label": "OpenAI",
+        "url": "https://platform.openai.com/api-keys",
     },
 }
 
@@ -878,8 +878,8 @@ def _onboard() -> None:
     _onboard_api_key()
     if not _has_any_api_key():
         raise SystemExit(
-            "No API key set. Set BROWSER_USE_API_KEY, OPENAI_API_KEY, or "
-            "ANTHROPIC_API_KEY, then run autofill again."
+            "No API key set. Set BROWSER_USE_API_KEY, ANTHROPIC_API_KEY, or "
+            "OPENAI_API_KEY, then run autofill again."
         )
     _onboard_files()
     ingest()
