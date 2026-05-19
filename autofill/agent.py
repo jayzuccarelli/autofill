@@ -893,8 +893,8 @@ def _onboard() -> None:
             "Add info to knowledge/profile.md and run autofill again."
         )
     console.print(
-        "[success]✓[/] Setup complete. Run [bold]autofill <url>[/] to fill a"
-        " form.\n"
+        "[success]✓[/] Setup complete. Run [bold]autofill '<url>'[/] to fill"
+        " a form.\n"
     )
 
 
@@ -966,7 +966,7 @@ def cli() -> None:
             console.print(_banner(
                 f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
                 "",
-                "Usage: [bold]autofill <url>[/]",
+                "Usage: [bold]autofill '<url>'[/]",
             ))
         return
 
@@ -980,7 +980,7 @@ def cli() -> None:
     if needs_setup:
         console.print(
             "[err]Not set up yet.[/] Run [bold]autofill[/] first, then"
-            " [bold]autofill <url>[/]."
+            " [bold]autofill '<url>'[/]."
         )
         raise SystemExit(1)
 
