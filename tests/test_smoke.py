@@ -125,7 +125,8 @@ class TestDetectProvider:
     def _clear_keys(self, monkeypatch):
         monkeypatch.delenv("AUTOFILL_PROVIDER", raising=False)
         for info in _PROVIDERS.values():
-            monkeypatch.delenv(info["env"], raising=False)
+            if info.get("env"):
+                monkeypatch.delenv(info["env"], raising=False)
 
     def test_returns_none_when_no_keys(self, monkeypatch):
         self._clear_keys(monkeypatch)
@@ -148,3 +149,14 @@ class TestDetectProvider:
         monkeypatch.setenv(_PROVIDERS["anthropic"]["env"], "ak")
         monkeypatch.setenv("AUTOFILL_PROVIDER", "openai")  # but no OPENAI_API_KEY
         assert _detect_provider() == "anthropic"
+
+    def test_ollama_activates_via_explicit_override(self, monkeypatch):
+        # No API key needed for Ollama — opt-in via AUTOFILL_PROVIDER.
+        self._clear_keys(monkeypatch)
+        monkeypatch.setenv("AUTOFILL_PROVIDER", "ollama")
+        assert _detect_provider() == "ollama"
+
+    def test_ollama_never_auto_detected(self, monkeypatch):
+        # Without AUTOFILL_PROVIDER=ollama, Ollama is not selected.
+        self._clear_keys(monkeypatch)
+        assert _detect_provider() is None
