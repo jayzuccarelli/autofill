@@ -51,8 +51,8 @@ The first time you run it, autofill walks you through:
 | Provider | Key env var | Notes |
 |---|---|---|
 | Browser Use | `BROWSER_USE_API_KEY` | Default — managed, no extra setup |
-| OpenAI | `OPENAI_API_KEY` | Uses `gpt-4o` |
 | Anthropic | `ANTHROPIC_API_KEY` | Uses `claude-sonnet-4-6` |
+| OpenAI | `OPENAI_API_KEY` | Uses `gpt-4o` |
 | Ollama | _(none — local)_ | Experimental. Needs Ollama running locally; defaults to `qwen2.5:14b`. Override with `AUTOFILL_OLLAMA_MODEL`; point at a remote host with `OLLAMA_HOST`. Smaller models (≤7B) tend to misfill fields — 14B+ recommended. |
 
 ### Fill a form
