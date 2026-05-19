@@ -9,6 +9,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
+from typing import Any
 from urllib.parse import urlparse
 
 import browser_use as bu
@@ -61,6 +62,9 @@ class Config:
     # Models — bump these when upgrading provider SDKs
     anthropic_model: str = "claude-sonnet-4-6"  # Anthropic Sonnet
     openai_model: str = "gpt-4o"                       # OpenAI GPT-4o
+    # Ollama default — 14B is the smallest size that fills real forms reliably.
+    # Override via AUTOFILL_OLLAMA_MODEL env var or the onboarding prompt.
+    ollama_model: str = "qwen2.5:14b"
 
     # Corrections
     corrections_file: Path = Path("knowledge/.corrections.jsonl")
@@ -78,7 +82,10 @@ _ATTACHABLE_SUFFIXES = frozenset({".pdf", ".doc", ".docx"})
 # it during ingestion but still allow it as an upload attachment.
 _UNPARSEABLE_SUFFIXES = frozenset({".doc"})
 
-_PROVIDERS: dict[str, dict[str, str]] = {
+# Provider registry. "env" is the API key env var, or None for providers that
+# don't take one (e.g. Ollama, which talks to a local server). "label" and
+# "url" are always strings — using Any to keep call sites typed as `str`.
+_PROVIDERS: dict[str, dict[str, Any]] = {
     "browseruse": {
         "env": "BROWSER_USE_API_KEY",
         "label": "Browser Use (default — cheapest, no extra deps)",
@@ -93,6 +100,11 @@ _PROVIDERS: dict[str, dict[str, str]] = {
         "env": "ANTHROPIC_API_KEY",
         "label": "Anthropic",
         "url": "https://console.anthropic.com/settings/keys",
+    },
+    "ollama": {
+        "env": None,
+        "label": "Ollama (local, experimental — needs 14B+ for good results)",
+        "url": "https://ollama.com/download",
     },
 }
 
@@ -163,18 +175,27 @@ def _banner(*info_lines: str) -> Table:
 
 
 def _detect_provider() -> str | None:
-    """Return the first provider whose API key is present in the environment."""
+    """Return the active provider, based on env vars.
+
+    Honours an explicit ``AUTOFILL_PROVIDER`` choice (including key-less
+    providers like Ollama); otherwise falls back to the first provider whose
+    API key is present. Key-less providers are never auto-selected — the user
+    must opt in via ``AUTOFILL_PROVIDER``.
+    """
     saved = os.environ.get("AUTOFILL_PROVIDER", "").strip().lower()
-    if saved in _PROVIDERS and os.environ.get(_PROVIDERS[saved]["env"]):
-        return saved
+    if saved in _PROVIDERS:
+        env = _PROVIDERS[saved].get("env")
+        if env is None or os.environ.get(env):
+            return saved
     for name, info in _PROVIDERS.items():
-        if os.environ.get(info["env"]):
+        env = info.get("env")
+        if env and os.environ.get(env):
             return name
     return None
 
 
 def _has_any_api_key() -> bool:
-    """Return True if at least one recognised API key is present in the environment."""
+    """Return True if a provider is configured (API key present, or Ollama selected)."""
     return _detect_provider() is not None
 
 
@@ -368,8 +389,13 @@ def _llm(provider: str) -> object:
         return ChatOpenAI(model=cfg.openai_model)
     if provider == "browseruse":
         return bu.ChatBrowserUse()
+    if provider == "ollama":
+        from browser_use.llm.ollama.chat import ChatOllama
+        model = os.environ.get("AUTOFILL_OLLAMA_MODEL") or cfg.ollama_model
+        # host=None lets the ollama SDK use OLLAMA_HOST or default to localhost.
+        return ChatOllama(model=model)
     raise ValueError(
-        f"Unknown provider '{provider}'. Choose: anthropic, openai, browseruse"
+        f"Unknown provider '{provider}'. Choose: anthropic, openai, browseruse, ollama"
     )
 
 
@@ -796,17 +822,66 @@ def _onboard_profile() -> None:
     )
 
 
+def _probe_ollama() -> bool:
+    """Return True if an Ollama server responds at OLLAMA_HOST (or localhost)."""
+    import httpx
+    host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
+    if not host.startswith(("http://", "https://")):
+        host = f"http://{host}"
+    try:
+        return httpx.get(f"{host}/api/tags", timeout=2.0).is_success
+    except Exception:
+        return False
+
+
+def _onboard_ollama() -> None:
+    """Configure Ollama: prompt for model, probe the server, write .env."""
+    url = _PROVIDERS["ollama"]["url"]
+    console.print(f"\n  Install Ollama and pull a model: [accent]{url}[/]\n")
+    model = _ask(
+        f"Model name (Enter for default '{cfg.ollama_model}')",
+        default=cfg.ollama_model,
+    )
+    lines = ["AUTOFILL_PROVIDER=ollama\n"]
+    if model != cfg.ollama_model:
+        lines.append(f"AUTOFILL_OLLAMA_MODEL={model}\n")
+        os.environ["AUTOFILL_OLLAMA_MODEL"] = model
+    with open(cfg.env_file, "a") as f:
+        f.writelines(lines)
+    cfg.env_file.chmod(0o600)
+    os.environ["AUTOFILL_PROVIDER"] = "ollama"
+    _capture("api_key_configured", {"provider": "ollama"})
+
+    if _probe_ollama():
+        console.print(f"[success]✓[/] Using Ollama with [bold]{model}[/].\n")
+    else:
+        host = os.environ.get("OLLAMA_HOST", "http://localhost:11434")
+        console.print(
+            f"[success]✓[/] Saved Ollama config (model: [bold]{model}[/]).\n"
+            f"[info]Note:[/] no Ollama server is responding at "
+            f"[bold]{host}[/]. Start it with [bold]ollama serve[/] and run"
+            f" [bold]ollama pull {model}[/] before using autofill.\n"
+        )
+
+
 def _onboard_api_key() -> None:
-    """Prompt for an LLM API key, confirming any auto-detected one before use."""
+    """Prompt for a provider (and API key, unless local); confirm any detected one."""
     console.print()
-    console.print(Rule("API key", style="accent"))
+    console.print(Rule("Provider", style="accent"))
 
     detected = _detect_provider()
     if detected:
         detected_label = _PROVIDERS[detected]["label"].split(" (")[0]
-        console.print(
-            f"\n  Detected [accent]{detected_label}[/] API key in your environment.\n"
-        )
+        if _PROVIDERS[detected].get("env") is None:
+            detected_msg = (
+                f"\n  Detected [accent]{detected_label}[/] configured in .env.\n"
+            )
+        else:
+            detected_msg = (
+                f"\n  Detected [accent]{detected_label}[/]"
+                " API key in your environment.\n"
+            )
+        console.print(detected_msg)
         keep = questionary.confirm(
             f"Use {detected_label}?", default=True, style=_Q_STYLE
         ).ask()
@@ -830,6 +905,10 @@ def _onboard_api_key() -> None:
     ).ask()
     if not provider:
         provider = "browseruse"
+
+    if provider == "ollama":
+        _onboard_ollama()
+        return
 
     info = _PROVIDERS[provider]
     console.print(f"\n  Get a key here: [accent]{info['url']}[/]\n")
@@ -878,8 +957,9 @@ def _onboard() -> None:
     _onboard_api_key()
     if not _has_any_api_key():
         raise SystemExit(
-            "No API key set. Set BROWSER_USE_API_KEY, OPENAI_API_KEY, or "
-            "ANTHROPIC_API_KEY, then run autofill again."
+            "No provider configured. Set BROWSER_USE_API_KEY, OPENAI_API_KEY,"
+            " or ANTHROPIC_API_KEY — or pick Ollama (local) by running"
+            " autofill again."
         )
     _onboard_files()
     ingest()
@@ -940,7 +1020,7 @@ def cli() -> None:
                         help="URL of the form to fill, or 'uninstall'")
     parser.add_argument(
         "--provider",
-        choices=["anthropic", "openai", "browseruse"],
+        choices=["anthropic", "openai", "browseruse", "ollama"],
         default=None,
         help="LLM provider (auto-detected from API key if omitted)",
     )
