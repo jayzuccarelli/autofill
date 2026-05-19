@@ -199,6 +199,21 @@ def _has_any_api_key() -> bool:
     return _detect_provider() is not None
 
 
+def _key_fingerprint(provider: str) -> str:
+    """Return a short masked tail like ``(…a4f2)`` so users can tell which key is active.
+
+    Disambiguates when the same provider has different keys in the shell vs ``.env``.
+    Returns ``""`` for key-less providers (Ollama) or when the key is missing/too short.
+    """
+    env = _PROVIDERS.get(provider, {}).get("env")
+    if not env:
+        return ""
+    key = (os.environ.get(env) or "").strip()
+    if len(key) < 4:
+        return ""
+    return f"(…{key[-4:]})"
+
+
 def _client() -> chromadb.ClientAPI:
     """Return a persistent Chroma client, creating the DB directory if needed."""
     cfg.db_path.mkdir(parents=True, exist_ok=True)
@@ -875,18 +890,23 @@ def _onboard_api_key() -> None:
     detected = _detect_provider()
     if detected:
         detected_label = _PROVIDERS[detected]["label"].split(" (")[0]
+        fp = _key_fingerprint(detected)
+        fp_suffix = f" {fp}" if fp else ""
         if _PROVIDERS[detected].get("env") is None:
             detected_msg = (
                 f"\n  Detected [accent]{detected_label}[/] configured in .env.\n"
             )
         else:
             detected_msg = (
-                f"\n  Detected [accent]{detected_label}[/]"
+                f"\n  Detected [accent]{detected_label}[/] API key"
+                f" [dim]{fp}[/] in your environment.\n"
+                if fp
+                else f"\n  Detected [accent]{detected_label}[/]"
                 " API key in your environment.\n"
             )
         console.print(detected_msg)
         keep = questionary.confirm(
-            f"Use {detected_label}?", default=True, style=_Q_STYLE
+            f"Use {detected_label}{fp_suffix}?", default=True, style=_Q_STYLE
         ).ask()
         if keep:
             if os.environ.get("AUTOFILL_PROVIDER") != detected:
@@ -895,7 +915,7 @@ def _onboard_api_key() -> None:
                 cfg.env_file.chmod(0o600)
                 os.environ["AUTOFILL_PROVIDER"] = detected
             _capture("api_key_configured", {"provider": detected, "source": "detected"})
-            console.print(f"[success]✓[/] Using {detected_label}.\n")
+            console.print(f"[success]✓[/] Using {detected_label}{fp_suffix}.\n")
             return
         console.print()
 
@@ -1066,12 +1086,18 @@ def cli() -> None:
 
     provider = args.provider or _detect_provider() or "browseruse"
     provider_label = _PROVIDERS[provider]["label"].split(" (")[0]
+    fp = _key_fingerprint(provider)
+    provider_line = (
+        f"[dim]Provider:[/] [accent]{provider_label}[/] [dim]{fp}[/]"
+        if fp
+        else f"[dim]Provider:[/] [accent]{provider_label}[/]"
+    )
     _capture("cli_invoked", {"provider": provider, "version": _VERSION})
 
     console.print()
     console.print(_banner(
         f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
-        f"[dim]Provider:[/] [accent]{provider_label}[/]",
+        provider_line,
     ))
     console.print()
     ingest()
