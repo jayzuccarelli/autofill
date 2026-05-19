@@ -29,6 +29,7 @@ dependencies = [
     "python-dotenv>=1.0",
     "questionary>=2.1.1",
     "rich>=14.0",
+    "sentry-sdk>=2.0",
 ]
 
 [project.optional-dependencies]
