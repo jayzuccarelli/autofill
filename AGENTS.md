@@ -12,8 +12,8 @@ Instructions for coding agents (Cursor, Copilot, Devin, etc.) working on **autof
 ## Setup
 
 - **Package manager:** [uv](https://docs.astral.sh/uv/). Install deps: `uv sync` (lockfile: [`uv.lock`](uv.lock)).
-- **LLM providers:** Browser Use (default), Anthropic, and OpenAI are all supported out of the box — the `anthropic` and `openai` SDKs ship as browser-use transitive deps, so no extras to install.
-- **Secrets:** `.env` in repo root (gitignored). `load_dotenv()` runs at start of `cli()`. Needs one of: `BROWSER_USE_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`. Onboarding prompts the user to pick a provider. `AUTOFILL_PROVIDER` (also in `.env`) records the choice; `--provider` flag or auto-detection from available keys also works.
+- **LLM providers:** Browser Use (default), Anthropic, OpenAI, and Ollama (local) are all supported out of the box — the `anthropic`, `openai`, and `ollama` SDKs ship as browser-use transitive deps, so no extras to install.
+- **Secrets:** `.env` in repo root (gitignored). `load_dotenv()` runs at start of `cli()`. Needs one of: `BROWSER_USE_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `AUTOFILL_PROVIDER=ollama` (no key — talks to a local Ollama server). Onboarding prompts the user to pick a provider. `AUTOFILL_PROVIDER` (also in `.env`) records the choice; `--provider` flag or auto-detection from available keys also works. Ollama is never auto-detected — only the explicit `AUTOFILL_PROVIDER=ollama` activates it. Ollama model override: `AUTOFILL_OLLAMA_MODEL` (defaults to `cfg.ollama_model`); host override: standard `OLLAMA_HOST` (default `http://localhost:11434`).
 - **One-shot install for humans:** [`install.sh`](install.sh) + see [README.md](README.md).
 
 ## Run

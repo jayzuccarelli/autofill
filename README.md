@@ -42,7 +42,7 @@ autofill
 
 The first time you run it, autofill walks you through:
 1. **Profile** — asks your name, date of birth, email, phone, location, socials, and a short summary; saves to `knowledge/profile.md`.
-2. **API key** — lets you pick a provider (Browser Use, OpenAI, or Anthropic), then paste your key; saves to `.env`.
+2. **Provider** — lets you pick a provider (Browser Use, OpenAI, Anthropic, or local Ollama), then paste your key (skipped for Ollama); saves to `.env`.
 3. **Extra files** — optionally add resumes, cover letters, etc. to `knowledge/`.
 4. **Builds the database** — indexes everything under `knowledge/` so it's ready.
 
@@ -53,6 +53,7 @@ The first time you run it, autofill walks you through:
 | Browser Use | `BROWSER_USE_API_KEY` | Default — managed, no extra setup |
 | Anthropic | `ANTHROPIC_API_KEY` | Uses `claude-sonnet-4-6` |
 | OpenAI | `OPENAI_API_KEY` | Uses `gpt-4o` |
+| Ollama | _(none — local)_ | Experimental. Needs Ollama running locally; defaults to `qwen2.5:14b`. Override with `AUTOFILL_OLLAMA_MODEL`; point at a remote host with `OLLAMA_HOST`. Smaller models (≤7B) tend to misfill fields — 14B+ recommended. |
 
 ### Fill a form
 
@@ -105,7 +106,7 @@ autofill is designed for forms that don't require sign-in. It's been tested with
 
 ## Privacy & telemetry
 
-Your profile and documents stay on your machine — autofill reads them locally and stores corrections locally. Relevant excerpts are sent to the LLM provider you configured (Browser Use, OpenAI, or Anthropic) so it can fill in form fields; that content is subject to your provider's data-handling policy. Passwords, SSNs, and similar sensitive fields are stripped before any corrections are saved.
+Your profile and documents stay on your machine — autofill reads them locally and stores corrections locally. Relevant excerpts are sent to the LLM provider you configured (Browser Use, OpenAI, or Anthropic) so it can fill in form fields; that content is subject to your provider's data-handling policy. Choose the Ollama provider to keep everything on your machine — no profile excerpts leave your network. Passwords, SSNs, and similar sensitive fields are stripped before any corrections are saved.
 
 autofill collects **anonymous** usage events (tool version, OS, LLM provider, whether a run completed) to help prioritize development. No personal data, no form content, no URLs. To opt out, set `AUTOFILL_TELEMETRY=0` in your shell:
 
