@@ -1,15 +1,17 @@
-"""Anonymous, opt-out usage telemetry.
+"""Observability: anonymous usage telemetry (PostHog) and opt-in crash reporting (Sentry).
 
-To disable: set ``AUTOFILL_TELEMETRY=0`` in ``.env`` or your environment.
-
+Usage telemetry (PostHog) is opt-out — disable with ``AUTOFILL_TELEMETRY=0``.
 Events sent (no PII):
   install            — first-time setup completed
   run / complete     — form fill started / finished
   timeout            — agent hit the time limit
   corrections_saved  — user corrections recorded
-
 All events include: tool version, Python version, OS platform.
-Nothing is sent when ``AUTOFILL_TELEMETRY=0`` or the PostHog key is a placeholder.
+
+Crash reporting (Sentry) is opt-in — enable with ``AUTOFILL_SENTRY=1``.
+Off by default because stack frames can incidentally capture personal profile
+data. When enabled, defaults are conservative: no PII, no local variables in
+frames, no performance tracing.
 """
 
 import os
@@ -102,3 +104,42 @@ def _send(event: str, extra: dict) -> None:
         urllib.request.urlopen(req, timeout=5)
     except Exception:
         pass
+
+
+# ── Sentry setup (opt-in) ────────────────────────────────────────────────────
+# Public DSN — write-only, safe to commit. Users opt in via AUTOFILL_SENTRY=1.
+_SENTRY_DSN = "https://30e81fbd4680630b19d8561d7aeaa818@o4511413765865472.ingest.us.sentry.io/4511413767831552"
+
+
+def _sentry_enabled() -> bool:
+    return (
+        os.environ.get("AUTOFILL_SENTRY", "0").strip() == "1"
+        and not _SENTRY_DSN.startswith("REPLACE_")
+    )
+
+
+def init_sentry() -> None:
+    """Initialise Sentry crash reporting when AUTOFILL_SENTRY=1.
+
+    No-op when disabled or when sentry-sdk is unavailable.
+    """
+    if not _sentry_enabled():
+        return
+    try:
+        import sentry_sdk
+        from importlib.metadata import version as _pkg_version
+    except ImportError:
+        return
+    try:
+        pkg_version = _pkg_version("autofill")
+    except Exception:
+        pkg_version = "unknown"
+    sentry_sdk.init(
+        dsn=_SENTRY_DSN,
+        release=f"autofill@{pkg_version}",
+        send_default_pii=False,
+        include_local_variables=False,
+        max_breadcrumbs=20,
+        traces_sample_rate=0.0,
+    )
+    sentry_sdk.set_tag("install_id", _install_id())

@@ -121,6 +121,12 @@ echo 'export AUTOFILL_TELEMETRY=0' >> ~/.bash_profile
 
 Then open a new terminal.
 
+Crash reports (Sentry) are **off by default** — autofill handles personal profile data, and stack frames can incidentally capture anything in scope, so we don't ship them unless you ask. If you'd like to send crash reports to help fix bugs, opt in with `AUTOFILL_SENTRY=1`:
+
+```bash
+echo 'export AUTOFILL_SENTRY=1' >> ~/.zshrc   # or ~/.bashrc / ~/.bash_profile
+```
+
 ## Contributing
 
 Found a bug or have a feature idea? [Open an issue](https://github.com/jayzuccarelli/autofill/issues) — there are templates for both. PRs welcome; start with [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup and [`AGENTS.md`](AGENTS.md) for architecture. MIT licensed.
