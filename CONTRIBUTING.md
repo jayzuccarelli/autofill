@@ -15,7 +15,7 @@ uv sync --extra dev
 cp knowledge/profile.example.md knowledge/profile.md   # then edit
 ```
 
-Add an API key to `.env` (one of `BROWSER_USE_API_KEY`, `OPENAI_API_KEY`, or `ANTHROPIC_API_KEY`) and run `uv run autofill <url>`.
+Add an API key to `.env` (one of `BROWSER_USE_API_KEY`, `ANTHROPIC_API_KEY`, or `OPENAI_API_KEY`) and run `uv run autofill '<url>'`.
 
 ## Before you open a PR
 

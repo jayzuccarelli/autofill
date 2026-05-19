@@ -91,15 +91,15 @@ _PROVIDERS: dict[str, dict[str, Any]] = {
         "label": "Browser Use (default — cheapest, no extra deps)",
         "url": "https://cloud.browser-use.com/settings?tab=api-keys&new=1",
     },
-    "openai": {
-        "env": "OPENAI_API_KEY",
-        "label": "OpenAI",
-        "url": "https://platform.openai.com/api-keys",
-    },
     "anthropic": {
         "env": "ANTHROPIC_API_KEY",
         "label": "Anthropic",
         "url": "https://console.anthropic.com/settings/keys",
+    },
+    "openai": {
+        "env": "OPENAI_API_KEY",
+        "label": "OpenAI",
+        "url": "https://platform.openai.com/api-keys",
     },
     "ollama": {
         "env": None,
@@ -783,6 +783,7 @@ def _onboard_profile() -> None:
     console.print("I need some info to fill forms on your behalf.\n", style="info")
 
     name = _ask("Full name")
+    preferred = _ask("Preferred Name (or Enter to skip)")
     dob = _ask("Date of birth (YYYY-MM-DD, or Enter to skip)")
     email = _ask("Email")
     phone = _ask("Phone (or Enter to skip)")
@@ -794,6 +795,8 @@ def _onboard_profile() -> None:
 
     lines = [f"# {name}\n"]
     lines.append(f"- **Full name:** {name}")
+    if preferred:
+        lines.append(f"- **Preferred Name:** {preferred}")
     if dob:
         lines.append(f"- **Date of birth:** {dob}")
     if email:
@@ -957,9 +960,9 @@ def _onboard() -> None:
     _onboard_api_key()
     if not _has_any_api_key():
         raise SystemExit(
-            "No provider configured. Set BROWSER_USE_API_KEY, OPENAI_API_KEY,"
-            " or ANTHROPIC_API_KEY — or pick Ollama (local) by running"
-            " autofill again."
+            "No provider configured. Set BROWSER_USE_API_KEY,"
+            " ANTHROPIC_API_KEY, or OPENAI_API_KEY — or pick Ollama (local)"
+            " by running autofill again."
         )
     _onboard_files()
     ingest()
@@ -970,8 +973,8 @@ def _onboard() -> None:
             "Add info to knowledge/profile.md and run autofill again."
         )
     console.print(
-        "[success]✓[/] Setup complete. Run [bold]autofill <url>[/] to fill a"
-        " form.\n"
+        "[success]✓[/] Setup complete. Run [bold]autofill '<url>'[/] to fill"
+        " a form.\n"
     )
 
 
@@ -1043,7 +1046,7 @@ def cli() -> None:
             console.print(_banner(
                 f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
                 "",
-                "Usage: [bold]autofill <url>[/]",
+                "Usage: [bold]autofill '<url>'[/]",
             ))
         return
 
@@ -1057,7 +1060,7 @@ def cli() -> None:
     if needs_setup:
         console.print(
             "[err]Not set up yet.[/] Run [bold]autofill[/] first, then"
-            " [bold]autofill <url>[/]."
+            " [bold]autofill '<url>'[/]."
         )
         raise SystemExit(1)
 

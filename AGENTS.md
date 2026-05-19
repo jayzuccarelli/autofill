@@ -5,23 +5,23 @@ Instructions for coding agents (Cursor, Copilot, Devin, etc.) working on **autof
 ## What this repo is
 
 - **autofill** ingests markdown/PDF under `knowledge/`, stores chunks in **Chroma** (`knowledge/.db/`), retrieves top‑k chunks with a fixed query, and passes them into a **[browser-use](https://github.com/browser-use/browser-use)** `Agent` task so a browser fills a form. The user reviews and submits manually (submit is never clicked by design).
-- **Single implementation file:** [`autofill/agent.py`](autofill/agent.py) — `ingest`, `retrieve`, `_llm`, `main`, `cli`, `_onboard*`. Entry point: `[project.scripts]` in `pyproject.toml` → `cli()`. Invoke with `uv run autofill <url>`.
+- **Single implementation file:** [`autofill/agent.py`](autofill/agent.py) — `ingest`, `retrieve`, `_llm`, `main`, `cli`, `_onboard*`. Entry point: `[project.scripts]` in `pyproject.toml` → `cli()`. Invoke with `uv run autofill '<url>'`.
 - **Onboarding:** `cli()` checks for profile content + API key on every run. If missing, interactive prompts walk the user through setup (profile questions, key, optional files, then `ingest()`).
 - **Paths are cwd-relative:** `Path("knowledge")` — commands must run from **repository root**.
 
 ## Setup
 
 - **Package manager:** [uv](https://docs.astral.sh/uv/). Install deps: `uv sync` (lockfile: [`uv.lock`](uv.lock)).
-- **LLM providers:** Browser Use (default), OpenAI, Anthropic, and Ollama (local) are all supported out of the box — the `openai`, `anthropic`, and `ollama` SDKs ship as browser-use transitive deps, so no extras to install.
-- **Secrets:** `.env` in repo root (gitignored). `load_dotenv()` runs at start of `cli()`. Needs one of: `BROWSER_USE_API_KEY`, `OPENAI_API_KEY`, `ANTHROPIC_API_KEY`, or `AUTOFILL_PROVIDER=ollama` (no key — talks to a local Ollama server). Onboarding prompts the user to pick a provider. `AUTOFILL_PROVIDER` (also in `.env`) records the choice; `--provider` flag or auto-detection from available keys also works. Ollama is never auto-detected — only the explicit `AUTOFILL_PROVIDER=ollama` activates it. Ollama model override: `AUTOFILL_OLLAMA_MODEL` (defaults to `cfg.ollama_model`); host override: standard `OLLAMA_HOST` (default `http://localhost:11434`).
+- **LLM providers:** Browser Use (default), Anthropic, OpenAI, and Ollama (local) are all supported out of the box — the `anthropic`, `openai`, and `ollama` SDKs ship as browser-use transitive deps, so no extras to install.
+- **Secrets:** `.env` in repo root (gitignored). `load_dotenv()` runs at start of `cli()`. Needs one of: `BROWSER_USE_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `AUTOFILL_PROVIDER=ollama` (no key — talks to a local Ollama server). Onboarding prompts the user to pick a provider. `AUTOFILL_PROVIDER` (also in `.env`) records the choice; `--provider` flag or auto-detection from available keys also works. Ollama is never auto-detected — only the explicit `AUTOFILL_PROVIDER=ollama` activates it. Ollama model override: `AUTOFILL_OLLAMA_MODEL` (defaults to `cfg.ollama_model`); host override: standard `OLLAMA_HOST` (default `http://localhost:11434`).
 - **One-shot install for humans:** [`install.sh`](install.sh) + see [README.md](README.md).
 
 ## Run
 
 ```bash
 autofill                              # first time: runs onboarding (profile, provider, key, files, DB)
-autofill <form-url>                   # fill a form (provider auto-detected from API key)
-autofill --provider anthropic <url>   # override provider
+autofill '<form-url>'                 # fill a form (provider auto-detected from API key)
+autofill --provider anthropic '<url>' # override provider
 ```
 
 Dev shortcut: `uv run autofill …` also works.
