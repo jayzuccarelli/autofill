@@ -29,6 +29,7 @@ from rich.table import Table
 from rich.text import Text
 from rich.theme import Theme
 
+from autofill.telemetry import init_sentry as _init_sentry
 from autofill.telemetry import track as _capture
 
 
@@ -1017,6 +1018,7 @@ def cli() -> None:
     """Parse arguments and dispatch to onboarding, status, or form fill."""
     os.chdir(Path(__file__).resolve().parent.parent)
     load_dotenv()
+    _init_sentry()
     import argparse
     parser = argparse.ArgumentParser(description="AI-powered form autofill")
     parser.add_argument("command", nargs="?", default=None,
