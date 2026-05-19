@@ -1,4 +1,4 @@
-"""Observability: anonymous usage telemetry (PostHog) and opt-in crash reporting (Sentry).
+"""Observability: opt-out PostHog usage events + opt-in Sentry crash reports.
 
 Usage telemetry (PostHog) is opt-out — disable with ``AUTOFILL_TELEMETRY=0``.
 Events sent (no PII):
@@ -126,8 +126,9 @@ def init_sentry() -> None:
     if not _sentry_enabled():
         return
     try:
-        import sentry_sdk
         from importlib.metadata import version as _pkg_version
+
+        import sentry_sdk
     except ImportError:
         return
     try:
