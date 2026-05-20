@@ -200,7 +200,7 @@ def _has_any_api_key() -> bool:
 
 
 def _key_fingerprint(provider: str) -> str:
-    """Return a short masked tail like ``(…a4f2)`` so users can tell which key is active.
+    """Return a short masked tail like ``(…a4f2)`` so the active key is visible.
 
     Disambiguates when the same provider has different keys in the shell vs ``.env``.
     Returns ``""`` for key-less providers (Ollama) or when the key is missing/too short.
