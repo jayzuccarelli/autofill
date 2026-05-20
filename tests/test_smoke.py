@@ -10,6 +10,7 @@ from autofill.agent import (
     _SENSITIVE_FIELD_RE,
     _chunk_text,
     _detect_provider,
+    _key_fingerprint,
     _load_corrections,
     _save_corrections,
     cfg,
@@ -160,3 +161,25 @@ class TestDetectProvider:
         # Without AUTOFILL_PROVIDER=ollama, Ollama is not selected.
         self._clear_keys(monkeypatch)
         assert _detect_provider() is None
+
+
+class TestKeyFingerprint:
+    def test_returns_masked_tail(self, monkeypatch):
+        monkeypatch.setenv(_PROVIDERS["anthropic"]["env"], "sk-ant-abcd1234")
+        assert _key_fingerprint("anthropic") == "(…1234)"
+
+    def test_empty_when_key_missing(self, monkeypatch):
+        monkeypatch.delenv(_PROVIDERS["anthropic"]["env"], raising=False)
+        assert _key_fingerprint("anthropic") == ""
+
+    def test_empty_for_keyless_provider(self):
+        # Ollama has no env key — fingerprint should be empty.
+        assert _key_fingerprint("ollama") == ""
+
+    def test_empty_for_short_key(self, monkeypatch):
+        monkeypatch.setenv(_PROVIDERS["openai"]["env"], "ab")
+        assert _key_fingerprint("openai") == ""
+
+    def test_strips_whitespace_before_measuring(self, monkeypatch):
+        monkeypatch.setenv(_PROVIDERS["openai"]["env"], "  wxyz9876  ")
+        assert _key_fingerprint("openai") == "(…9876)"
