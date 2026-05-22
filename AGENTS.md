@@ -15,6 +15,7 @@ Instructions for coding agents (Cursor, Copilot, Devin, etc.) working on **autof
 - **LLM providers:** Browser Use (default), Anthropic, OpenAI, and Ollama (local) are all supported out of the box — the `anthropic`, `openai`, and `ollama` SDKs ship as browser-use transitive deps, so no extras to install.
 - **Secrets:** `.env` in repo root (gitignored). `load_dotenv()` runs at start of `cli()`. Needs one of: `BROWSER_USE_API_KEY`, `ANTHROPIC_API_KEY`, `OPENAI_API_KEY`, or `AUTOFILL_PROVIDER=ollama` (no key — talks to a local Ollama server). Onboarding prompts the user to pick a provider. `AUTOFILL_PROVIDER` (also in `.env`) records the choice; `--provider` flag or auto-detection from available keys also works. Ollama is never auto-detected — only the explicit `AUTOFILL_PROVIDER=ollama` activates it. Ollama model override: `AUTOFILL_OLLAMA_MODEL` (defaults to `cfg.ollama_model`); host override: standard `OLLAMA_HOST` (default `http://localhost:11434`).
 - **One-shot install for humans:** [`install.sh`](install.sh) + see [README.md](README.md).
+- **Observability:** [`autofill/telemetry.py`](autofill/telemetry.py) handles both PostHog (anonymous usage events, **opt-out** via `AUTOFILL_TELEMETRY=0`) and Sentry (crash reports, **opt-in** via `AUTOFILL_SENTRY=1`). Asymmetric defaults are intentional: PostHog events are author-controlled and contain no PII, while Sentry captures stack frames that could incidentally include profile data. `init_sentry()` is called from `cli()` right after `load_dotenv()`.
 
 ## Run
 
