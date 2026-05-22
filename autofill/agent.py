@@ -295,11 +295,11 @@ def ingest() -> None:
     stored = col.get(include=["metadatas"])
     stored_hashes: dict[str, str] = {}
     stored_ids: dict[str, list[str]] = {}
-    for doc_id, meta in zip(stored["ids"], stored["metadatas"]):
+    for doc_id, meta in zip(stored["ids"] or [], stored["metadatas"] or []):
         fname = doc_id.split(":")[0]
         stored_ids.setdefault(fname, []).append(doc_id)
         if meta and "hash" in meta and fname not in stored_hashes:
-            stored_hashes[fname] = meta["hash"]
+            stored_hashes[fname] = str(meta["hash"])
 
     visible_files = [
         path for path in sorted(cfg.knowledge_dir.iterdir())
@@ -370,7 +370,8 @@ def retrieve(query: str, n: int = cfg.retrieval_n) -> str:
     """Query Chroma and return the top-*n* chunks joined by blank lines."""
     col = _client().get_or_create_collection(cfg.collection)
     results = col.query(query_texts=[query], n_results=n)
-    docs: list[str] = results["documents"][0]  # type: ignore[index]
+    docs_lists = results["documents"] or [[]]
+    docs: list[str] = docs_lists[0]
     return "\n\n".join(docs)
 
 
@@ -395,7 +396,7 @@ def _attachment_paths() -> list[str]:
     return [str(p) for p in paths]
 
 
-def _llm(provider: str) -> object:
+def _llm(provider: str) -> Any:
     """Instantiate the chat model for the given *provider* name."""
     if provider == "anthropic":
         from browser_use.llm.anthropic.chat import ChatAnthropic

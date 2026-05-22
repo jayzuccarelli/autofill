@@ -39,7 +39,7 @@ Dev shortcut: `uv run autofill …` also works.
 ```bash
 uv sync --extra dev
 uv run ruff check .
-uv run mypy autofill/
+uv run ty check
 uv run pytest tests/
 ```
 

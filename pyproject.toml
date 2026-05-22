@@ -37,7 +37,7 @@ dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",
     "ruff>=0.4",
-    "mypy>=1.10",
+    "ty>=0.0.37",
 ]
 
 [project.urls]
@@ -62,6 +62,5 @@ target-version = "py311"
 [tool.ruff.lint]
 select = ["E", "F", "I", "UP"]
 
-[tool.mypy]
-python_version = "3.11"
-strict = true
+[tool.ty.environment]
+python-version = "3.11"
