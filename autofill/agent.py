@@ -786,6 +786,7 @@ Rules:
             f"\n[err]Agent timed out after {cfg.agent_timeout}s.[/] "
             "The browser is still open — you can continue manually.",
         )
+    agent_run_elapsed = int(time.monotonic() - run_start)
     try:
         # Snapshot what the agent filled, then poll for user edits until submit.
         console.print(
@@ -799,9 +800,8 @@ Rules:
                 agent_snapshot = await _snapshot_fields(agent.browser_session)
                 console.print(f"[dim]Tracking {len(agent_snapshot)} field(s)…[/]")
                 user_snapshot = dict(agent_snapshot)
-                await _poll_fields(agent.browser_session, user_snapshot)
             except Exception as exc:
-                console.print(f"[err]Warning:[/] Could not track field changes: {exc}")
+                console.print(f"[err]Warning:[/] Could not snapshot fields: {exc}")
 
         if not timed_out:
             _capture(
@@ -810,10 +810,16 @@ Rules:
                     "provider": provider,
                     "has_attachments": bool(attachments),
                     "last_step": last_step,
-                    "elapsed_seconds": int(time.monotonic() - run_start),
+                    "elapsed_seconds": agent_run_elapsed,
                     "field_count_bucket": _field_count_bucket(len(agent_snapshot)),
                 },
             )
+
+        if agent.browser_session is not None and agent_snapshot:
+            try:
+                await _poll_fields(agent.browser_session, user_snapshot)
+            except Exception as exc:
+                console.print(f"[err]Warning:[/] Could not track field changes: {exc}")
 
         corrections = {
             k: {"agent": agent_snapshot.get(k, ""), "user": v}
