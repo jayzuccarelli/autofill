@@ -14,6 +14,7 @@ data. When enabled, defaults are conservative: no PII, no local variables in
 frames, no performance tracing.
 """
 
+import atexit
 import os
 import platform
 import sys
@@ -31,6 +32,8 @@ _POSTHOG_HOST = "https://us.i.posthog.com"
 _MAX_EVENTS_PER_PROCESS = 25
 _event_count = 0
 _event_count_lock = threading.Lock()
+_client = None
+_client_lock = threading.Lock()
 # ─────────────────────────────────────────────────────────────────────────────
 
 
@@ -55,8 +58,30 @@ def _install_id() -> str:
         return "unknown"
 
 
+def _get_client():
+    """Lazy-init the PostHog client; register atexit flush on first use."""
+    global _client
+    if _client is not None:
+        return _client
+    with _client_lock:
+        if _client is not None:
+            return _client
+        try:
+            from posthog import Posthog
+        except ImportError:
+            return None
+        _client = Posthog(project_api_key=_POSTHOG_KEY, host=_POSTHOG_HOST)
+        atexit.register(_client.shutdown)
+    return _client
+
+
 def track(event: str, properties: dict | None = None) -> None:
-    """Fire-and-forget telemetry ping.  Never raises, never blocks the caller."""
+    """Fire-and-forget telemetry ping. Never raises, never blocks the caller.
+
+    Events are queued on the PostHog SDK's background consumer thread and
+    flushed at process exit via an atexit hook, so calls near shutdown
+    don't get dropped.
+    """
     if not _enabled():
         return
     global _event_count
@@ -64,17 +89,10 @@ def track(event: str, properties: dict | None = None) -> None:
         if _event_count >= _MAX_EVENTS_PER_PROCESS:
             return
         _event_count += 1
-    threading.Thread(
-        target=_send,
-        args=(event, properties or {}),
-        daemon=True,
-    ).start()
-
-
-def _send(event: str, extra: dict) -> None:
+    client = _get_client()
+    if client is None:
+        return
     try:
-        import json
-        import urllib.request
         from importlib.metadata import version as _pkg_version
 
         try:
@@ -83,25 +101,12 @@ def _send(event: str, extra: dict) -> None:
             pkg_version = "unknown"
 
         props = {
-            "$lib": "autofill",
             "version": pkg_version,
             "python": f"{sys.version_info.major}.{sys.version_info.minor}",
             "platform": platform.system().lower(),
-            **extra,
+            **(properties or {}),
         }
-        payload = json.dumps({
-            "api_key": _POSTHOG_KEY,
-            "event": event,
-            "distinct_id": _install_id(),
-            "properties": props,
-        }).encode()
-        req = urllib.request.Request(
-            f"{_POSTHOG_HOST}/capture/",
-            data=payload,
-            headers={"Content-Type": "application/json"},
-            method="POST",
-        )
-        urllib.request.urlopen(req, timeout=5)
+        client.capture(event, distinct_id=_install_id(), properties=props)
     except Exception:
         pass
 
