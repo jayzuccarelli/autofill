@@ -3,8 +3,10 @@
 import asyncio
 import hashlib
 import json
+import logging
 import os
 import re
+import sys
 import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
@@ -108,6 +110,83 @@ _PROVIDERS: dict[str, dict[str, Any]] = {
         "url": "https://ollama.com/download",
     },
 }
+
+_LOG_RETENTION = 10  # Keep this many most-recent per-run log files (npm-style).
+
+
+def _log_dir() -> Path:
+    """Per-OS state dir for autofill log files.
+
+    Linux/other: ``$XDG_STATE_HOME/autofill/logs`` (default ``~/.local/state/...``).
+    macOS: ``~/Library/Logs/autofill``.
+    """
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Logs" / "autofill"
+    base = os.environ.get("XDG_STATE_HOME") or str(Path.home() / ".local" / "state")
+    return Path(base) / "autofill" / "logs"
+
+
+def _setup_logging() -> Path | None:
+    """Attach a per-run file handler to the root logger; return its path.
+
+    Captures whatever browser-use (``Agent``, ``prompts``, ``BrowserSession``,
+    ``tools``) writes via the stdlib ``logging`` module — same lines the user
+    sees on the terminal. Opt out with ``AUTOFILL_LOG=0``. Returns ``None``
+    when disabled or if the log directory can't be created.
+    """
+    if os.environ.get("AUTOFILL_LOG", "1").strip() == "0":
+        return None
+    log_dir = _log_dir()
+    try:
+        log_dir.mkdir(parents=True, exist_ok=True)
+    except Exception:
+        return None
+    timestamp = datetime.now(UTC).strftime("%Y-%m-%dT%H-%M-%S")
+    path = log_dir / f"{timestamp}.log"
+    try:
+        handler = logging.FileHandler(path, mode="w", encoding="utf-8")
+    except Exception:
+        return None
+    handler.setLevel(logging.INFO)
+    handler.setFormatter(
+        logging.Formatter(
+            "%(asctime)s %(levelname)-7s [%(name)s] %(message)s",
+            datefmt="%H:%M:%S",
+        )
+    )
+    root = logging.getLogger()
+    # Root defaults to WARNING; gate must be at INFO or our handler sees nothing.
+    if root.level == logging.NOTSET or root.level > logging.INFO:
+        root.setLevel(logging.INFO)
+    root.addHandler(handler)
+
+    # Prune older runs, keep last N.
+    try:
+        runs = sorted(
+            log_dir.glob("*.log"), key=lambda p: p.stat().st_mtime, reverse=True
+        )
+        for old in runs[_LOG_RETENTION:]:
+            try:
+                old.unlink()
+            except Exception:
+                pass
+    except Exception:
+        pass
+    return path
+
+
+def _field_count_bucket(n: int) -> str:
+    """Bucket field counts for telemetry — never sends a raw integer."""
+    if n <= 5:
+        return "0-5"
+    if n <= 15:
+        return "6-15"
+    if n <= 30:
+        return "16-30"
+    if n <= 60:
+        return "31-60"
+    return "60+"
+
 
 _ACCENT = "#7851A9"
 try:
@@ -621,7 +700,7 @@ def _save_corrections(url: str, corrections: dict) -> None:
         f.write(json.dumps(entry) + "\n")
 
 
-async def main(url: str, provider: str) -> None:
+async def main(url: str, provider: str, log_path: Path | None = None) -> None:
     """Build the task prompt and run the browser agent (ingest already ran in cli)."""
     profile = retrieve(cfg.retrieval_query)
     if not profile.strip():
@@ -630,6 +709,8 @@ async def main(url: str, provider: str) -> None:
             " knowledge/ (e.g. knowledge/profile.md — see README), run from the"
             " project root, then try again."
         )
+    if log_path is not None:
+        console.print(f"[dim]Logs: {log_path}[/]")
 
     attachments = _attachment_paths()
     if attachments:
@@ -682,8 +763,11 @@ Rules:
     # Step-level progress so users have proof of life during long runs.
     # We can't predict total duration; show the live counter and elapsed time.
     run_start = time.monotonic()
+    last_step = 0
 
     def _on_step(_state, _output, step_n: int) -> None:
+        nonlocal last_step
+        last_step = step_n
         elapsed = int(time.monotonic() - run_start)
         console.print(
             f"[dim]autofill › step {step_n}/{cfg.agent_max_steps}"
@@ -713,17 +797,14 @@ Rules:
         _capture("form_fill_timed_out", {
             "provider": provider,
             "timeout_seconds": cfg.agent_timeout,
+            "last_step": last_step,
         })
         console.print(
             f"\n[err]Agent timed out after {cfg.agent_timeout}s.[/] "
             "The browser is still open — you can continue manually.",
         )
+    agent_run_elapsed = int(time.monotonic() - run_start)
     try:
-        if not timed_out:
-            _capture(
-                "form_fill_completed",
-                {"provider": provider, "has_attachments": bool(attachments)},
-            )
         # Snapshot what the agent filled, then poll for user edits until submit.
         console.print(
             "\n[info]Capturing form state — please review and submit in the"
@@ -736,6 +817,23 @@ Rules:
                 agent_snapshot = await _snapshot_fields(agent.browser_session)
                 console.print(f"[dim]Tracking {len(agent_snapshot)} field(s)…[/]")
                 user_snapshot = dict(agent_snapshot)
+            except Exception as exc:
+                console.print(f"[err]Warning:[/] Could not snapshot fields: {exc}")
+
+        if not timed_out:
+            _capture(
+                "form_fill_completed",
+                {
+                    "provider": provider,
+                    "has_attachments": bool(attachments),
+                    "last_step": last_step,
+                    "elapsed_seconds": agent_run_elapsed,
+                    "field_count_bucket": _field_count_bucket(len(agent_snapshot)),
+                },
+            )
+
+        if agent.browser_session is not None and agent_snapshot:
+            try:
                 await _poll_fields(agent.browser_session, user_snapshot)
             except Exception as exc:
                 console.print(f"[err]Warning:[/] Could not track field changes: {exc}")
@@ -1104,7 +1202,8 @@ def cli() -> None:
     ))
     console.print()
     ingest()
-    asyncio.run(main(args.command, provider))
+    log_path = _setup_logging()
+    asyncio.run(main(args.command, provider, log_path))
 
 
 if __name__ == "__main__":
