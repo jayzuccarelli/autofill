@@ -60,11 +60,13 @@ class Config:
         "skills, languages, work authorization and visa status, salary "
         "expectations, demographics, references, certifications, projects"
     )
-    retrieval_n: int = 10
+    retrieval_n: int = 5
 
-    # Models — bump these when upgrading provider SDKs
-    anthropic_model: str = "claude-sonnet-4-6"  # Anthropic Sonnet
-    openai_model: str = "gpt-4o"                       # OpenAI GPT-4o
+    # Models — bump these when upgrading provider SDKs.
+    # Cheap defaults: Haiku and gpt-4o-mini are ~5-10x cheaper than Sonnet/4o
+    # and sufficient for form-filling. Bump to Sonnet if accuracy drops.
+    anthropic_model: str = "claude-haiku-4-5-20251001"  # Anthropic Haiku
+    openai_model: str = "gpt-4o-mini"                   # OpenAI GPT-4o mini
     # Ollama default — 14B is the smallest size that fills real forms reliably.
     # Override via AUTOFILL_OLLAMA_MODEL env var or the onboarding prompt.
     ollama_model: str = "qwen2.5:14b"
@@ -74,7 +76,7 @@ class Config:
 
     # Agent
     agent_timeout: int = 600  # seconds before agent.run() is cancelled
-    agent_max_steps: int = 50  # LLM turns; one turn = read DOM + 1-3 actions
+    agent_max_steps: int = 30  # LLM turns; one turn = read DOM + 1-3 actions
 
 
 cfg = Config()
@@ -780,7 +782,7 @@ Rules:
         browser_profile=browser_profile,
         initial_actions=[{"navigate": {"url": url, "new_tab": False}}],
         available_file_paths=attachments or None,
-        use_judge=True,
+        use_judge=False,
         register_new_step_callback=_on_step,
     )
     _capture("form_fill_started", {
