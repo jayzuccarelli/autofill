@@ -79,7 +79,7 @@ autofill uninstall
 
 ## What works best
 
-autofill is designed for forms that don't require sign-in. It's been tested with:
+autofill has been tested with:
 
 - **Greenhouse** (`*.greenhouse.io`)
 - **Lever** (`jobs.lever.co`)
@@ -87,9 +87,20 @@ autofill is designed for forms that don't require sign-in. It's been tested with
 - **Workable** (`apply.workable.com`)
 - Generic single-page HTML forms (Google Forms, Typeform, etc.)
 
+### Sites that require a login (Workday, iCIMS, etc.)
+
+These now work. autofill runs in a **persistent browser profile** (`~/.autofill/browser-profile`), so your logins are remembered across runs.
+
+- **Import your Chrome logins (optional).** During setup, autofill offers to import your existing Chrome cookies (sessions, never passwords) so it starts already signed in to sites you use. Best-effort — if Chrome's cookie store can't be read on your system, just use the manual flow below.
+- **Sign in once per site.** When the agent hits a sign-in or sign-up wall:
+  1. It **stops and waits** — it never types your credentials itself.
+  2. You log in (or create the account) manually in the open browser window, handling any MFA, then press **Enter** in the terminal.
+  3. The agent reloads the form — now authenticated — and fills it.
+
+  Because the session is saved, later runs go straight to the form.
+
 ### Known limitations
 
-- **Login walls** — autofill opens the URL and starts filling immediately. It won't pause for you to sign in. Sites that require an account before showing the form (Workday, iCIMS, LinkedIn Easy Apply, Indeed) won't work in this version; the agent will detect the login form and stop rather than try to fill it.
 - **CAPTCHAs** — Cloudflare challenges, reCAPTCHA, and similar bot checks halt the agent. The browser stays open so you can solve them manually, but the agent won't resume automatically.
 - **Very long multi-step apps** — supported up to ~50 LLM steps (configurable in `Config.agent_max_steps`); longer applications may exhaust the budget before reaching the final review screen.
 
