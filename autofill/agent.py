@@ -700,6 +700,28 @@ def _save_corrections(url: str, corrections: dict) -> None:
         f.write(json.dumps(entry) + "\n")
 
 
+def _force_input_clear(agent: bu.Agent) -> None:
+    """Force the LLM-controlled `clear` flag on `input_text` to True.
+
+    The action's schema exposes `clear=False` ("append") to the model, which
+    it occasionally picks to add a second profile value (e.g. GitHub) into
+    an already-filled field (e.g. LinkedIn). The library's auto-retry that
+    fixes accidental concatenation is gated on clear=True, so the append
+    path slips past it.
+    """
+    actions = agent.tools.registry.registry.actions
+    action = actions.get("input")
+    if action is None:
+        return
+    original = action.function
+
+    async def _input_with_forced_clear(params, **kwargs):
+        params.clear = True
+        return await original(params=params, **kwargs)
+
+    action.function = _input_with_forced_clear
+
+
 async def main(url: str, provider: str, log_path: Path | None = None) -> None:
     """Build the task prompt and run the browser agent (ingest already ran in cli)."""
     profile = retrieve(cfg.retrieval_query)
@@ -783,6 +805,7 @@ Rules:
         use_judge=True,
         register_new_step_callback=_on_step,
     )
+    _force_input_clear(agent)
     _capture("form_fill_started", {
         "provider": provider,
         "has_attachments": bool(attachments),
