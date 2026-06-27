@@ -9,6 +9,7 @@ from autofill.agent import (
     _PROVIDERS,
     _SENSITIVE_FIELD_RE,
     _chunk_text,
+    _cookiejar_to_storage_state,
     _detect_provider,
     _key_fingerprint,
     _load_corrections,
@@ -183,3 +184,44 @@ class TestKeyFingerprint:
     def test_strips_whitespace_before_measuring(self, monkeypatch):
         monkeypatch.setenv(_PROVIDERS["openai"]["env"], "  wxyz9876  ")
         assert _key_fingerprint("openai") == "(…9876)"
+
+
+class TestCookiejarToStorageState:
+    """`_cookiejar_to_storage_state` maps a cookielib jar to Playwright shape."""
+
+    def _cookie(self, **kw):
+        from http.cookiejar import Cookie
+
+        defaults = dict(
+            version=0, name="sid", value="abc", port=None, port_specified=False,
+            domain=".workday.com", domain_specified=True, domain_initial_dot=True,
+            path="/", path_specified=True, secure=True, expires=1893456000,
+            discard=False, comment=None, comment_url=None, rest={},
+        )
+        defaults.update(kw)
+        return Cookie(**defaults)
+
+    def test_basic_fields_map_through(self):
+        state = _cookiejar_to_storage_state([self._cookie()])
+        assert state["origins"] == []
+        (c,) = state["cookies"]
+        assert c["name"] == "sid"
+        assert c["value"] == "abc"
+        assert c["domain"] == ".workday.com"
+        assert c["secure"] is True
+        assert c["expires"] == 1893456000.0
+        assert c["sameSite"] == "Lax"
+
+    def test_session_cookie_gets_minus_one(self):
+        state = _cookiejar_to_storage_state([self._cookie(expires=None)])
+        assert state["cookies"][0]["expires"] == -1
+
+    def test_httponly_detected_from_rest(self):
+        # browser_cookie3 stashes HttpOnly in the cookie's nonstandard attrs.
+        on = self._cookie(rest={"HttpOnly": None})
+        off = self._cookie(rest={})
+        assert _cookiejar_to_storage_state([on])["cookies"][0]["httpOnly"] is True
+        assert _cookiejar_to_storage_state([off])["cookies"][0]["httpOnly"] is False
+
+    def test_empty_jar_yields_empty_cookies(self):
+        assert _cookiejar_to_storage_state([]) == {"cookies": [], "origins": []}

@@ -47,6 +47,15 @@ class Config:
     profile_example: Path = Path("knowledge/profile.example.md")
     profile: Path = Path("knowledge/profile.md")
     env_file: Path = Path(".env")
+    # Persistent browser profile — lives in $HOME (not cwd) so logins survive
+    # across runs. "chrome" must NOT appear in the path or browser-use copies it
+    # to a throwaway temp dir (see BrowserProfile._copy_profile) and persistence
+    # silently breaks.
+    browser_profile_dir: Path = Path.home() / ".autofill" / "browser-profile"
+    # One-time cookie seed imported from the user's Chrome at setup. Loaded into
+    # the browser on the next run (via storage_state), then deleted — afterwards
+    # the persistent profile above is the single source of truth.
+    seed_state_file: Path = Path.home() / ".autofill" / "seed-cookies.json"
 
     # Chunking
     chunk_size: int = 1000
@@ -759,6 +768,49 @@ def _force_input_clear(agent: bu.Agent) -> None:
     action.function = _input_with_forced_clear
 
 
+def _cookiejar_to_storage_state(jar) -> dict:
+    """Convert a cookielib-style jar to a Playwright storage_state dict.
+
+    Mirrors the shape browser-use's StorageStateWatchdog loads (see
+    ``export_storage_state``): a ``cookies`` list with name/value/domain/path/
+    expires/httpOnly/secure/sameSite, plus an empty ``origins`` list. Session
+    cookies (no expiry) get ``expires: -1``, which the loader normalises.
+    """
+    cookies = []
+    for c in jar:
+        cookies.append({
+            "name": c.name,
+            "value": c.value,
+            "domain": c.domain,
+            "path": c.path,
+            "expires": float(c.expires) if c.expires else -1,
+            "httpOnly": bool(c.has_nonstandard_attr("HttpOnly")),
+            "secure": bool(c.secure),
+            # cookielib doesn't expose SameSite; "Lax" is the browser default.
+            "sameSite": "Lax",
+        })
+    return {"cookies": cookies, "origins": []}
+
+
+def _import_chrome_cookies() -> dict | None:
+    """Read + decrypt the user's Chrome cookies into a storage_state dict.
+
+    Best-effort: returns None if ``browser_cookie3`` is missing, Chrome can't
+    be found, or the cookie store is locked/undecryptable. Callers fall back to
+    the manual sign-in flow in that case.
+    """
+    try:
+        import browser_cookie3
+    except ImportError:
+        return None
+    try:
+        jar = browser_cookie3.chrome()
+    except Exception:
+        return None
+    state = _cookiejar_to_storage_state(jar)
+    return state if state["cookies"] else None
+
+
 async def main(url: str, provider: str, log_path: Path | None = None) -> None:
     """Build the task prompt and run the browser agent (ingest already ran in cli)."""
     profile = retrieve(cfg.retrieval_query)
@@ -809,15 +861,31 @@ Rules:
   buttons like "Submit", "Submit application", "Apply", "Send application",
   "Finish", or anything similar that finalises and sends the form. When you
   reach that final button, STOP and finish with the done action.
-- If the page shows a login form, sign-in wall, or CAPTCHA, do NOT try to
-  fill it. Stop with the done action and tell the user the page needs
-  manual sign-in or a captcha solve before autofill can run.
+- If the page shows a login form, sign-in/sign-up wall, or CAPTCHA, do NOT
+  type credentials or solve it yourself. Stop immediately with the done action
+  and make your message start with the exact token LOGIN_REQUIRED followed by
+  a short note on what's needed (e.g. "LOGIN_REQUIRED: Workday account sign-in").
+  The user will sign in manually and you'll resume on the form afterwards.
 - When everything reasonable is filled, finish with the done action and tell
   the user to review and submit manually.
 """
 
     llm = _llm(provider)
-    browser_profile = bu.BrowserProfile(keep_alive=True, headless=False)
+    # Persistent user-data dir: the user signs into Workday/Greenhouse/etc. once,
+    # the cookies live here, and every later run is already authenticated.
+    cfg.browser_profile_dir.mkdir(parents=True, exist_ok=True)
+    # One-time seed: if Chrome cookies were imported at setup, load them on this
+    # run (storage_state) so the user starts already signed in. They get baked
+    # into the persistent profile, so we delete the seed afterwards (in finally).
+    seed_state = str(cfg.seed_state_file) if cfg.seed_state_file.exists() else None
+    if seed_state:
+        _capture("chrome_cookies_seeding")
+    browser_profile = bu.BrowserProfile(
+        keep_alive=True,
+        headless=False,
+        user_data_dir=str(cfg.browser_profile_dir),
+        storage_state=seed_state,
+    )
 
     # Step-level progress so users have proof of life during long runs.
     # We can't predict total duration; show the live counter and elapsed time.
@@ -833,36 +901,66 @@ Rules:
             f" · {elapsed}s elapsed[/]"
         )
 
-    agent = bu.Agent(
-        task=task,
-        llm=llm,
-        browser_profile=browser_profile,
-        initial_actions=[{"navigate": {"url": url, "new_tab": False}}],
-        available_file_paths=attachments or None,
-        use_judge=False,
-        register_new_step_callback=_on_step,
-    )
-    _force_input_clear(agent)
+    def _build_agent(session=None) -> bu.Agent:
+        """Construct the agent; reuse *session* (keeps the window) on resume."""
+        kwargs: dict = dict(
+            task=task,
+            llm=llm,
+            initial_actions=[{"navigate": {"url": url, "new_tab": False}}],
+            available_file_paths=attachments or None,
+            use_judge=False,
+            register_new_step_callback=_on_step,
+        )
+        if session is not None:
+            kwargs["browser_session"] = session
+        else:
+            kwargs["browser_profile"] = browser_profile
+        agent = bu.Agent(**kwargs)
+        _force_input_clear(agent)
+        return agent
+
+    agent = _build_agent()
     _capture("form_fill_started", {
         "provider": provider,
         "has_attachments": bool(attachments),
         "has_prior_corrections": bool(prior_corrections),
     })
     timed_out = False
-    try:
-        async with asyncio.timeout(cfg.agent_timeout):
-            await agent.run(max_steps=cfg.agent_max_steps)
-    except TimeoutError:
-        timed_out = True
-        _capture("form_fill_timed_out", {
-            "provider": provider,
-            "timeout_seconds": cfg.agent_timeout,
-            "last_step": last_step,
-        })
-        console.print(
-            f"\n[err]Agent timed out after {cfg.agent_timeout}s.[/] "
-            "The browser is still open — you can continue manually.",
-        )
+    # Pause-and-resume for login walls: the agent stops at a sign-in/sign-up
+    # page (emitting LOGIN_REQUIRED), the user authenticates manually in the
+    # open window, then we re-run on the same URL — now logged in. Cap at two
+    # resumes so a misfiring detector can't loop forever.
+    for attempt in range(3):
+        try:
+            async with asyncio.timeout(cfg.agent_timeout):
+                await agent.run(max_steps=cfg.agent_max_steps)
+        except TimeoutError:
+            timed_out = True
+            _capture("form_fill_timed_out", {
+                "provider": provider,
+                "timeout_seconds": cfg.agent_timeout,
+                "last_step": last_step,
+            })
+            console.print(
+                f"\n[err]Agent timed out after {cfg.agent_timeout}s.[/] "
+                "The browser is still open — you can continue manually.",
+            )
+            break
+
+        result = (agent.history.final_result() or "").strip()
+        if result.startswith("LOGIN_REQUIRED") and attempt < 2:
+            _capture("login_required", {"provider": provider, "attempt": attempt + 1})
+            note = result[len("LOGIN_REQUIRED"):].lstrip(" :-").strip()
+            console.print(
+                f"\n[accent]Sign-in needed[/]"
+                f"{' — ' + note if note else '.'}\n"
+                "  Log in (or sign up) in the open browser window. Your session"
+                " is saved here, so you'll only do this once per site.\n"
+            )
+            _ask("Press Enter once you're signed in and I'll continue…")
+            agent = _build_agent(session=agent.browser_session)
+            continue
+        break
     agent_run_elapsed = int(time.monotonic() - run_start)
     try:
         # Snapshot what the agent filled, then poll for user edits until submit.
@@ -920,6 +1018,9 @@ Rules:
                 await agent.browser_session.stop()
             except Exception:
                 pass
+        # One-time seed: now baked into the persistent profile, so drop it.
+        if seed_state:
+            cfg.seed_state_file.unlink(missing_ok=True)
 
 
 def _has_profile_content() -> bool:
@@ -1125,6 +1226,44 @@ def _onboard_files() -> None:
     console.print()
 
 
+def _onboard_browser_cookies() -> None:
+    """Optionally import existing Chrome logins so autofill starts signed in."""
+    console.print(Rule("Browser logins", style="accent"))
+    console.print(
+        "autofill can import your existing Chrome logins (cookies, never"
+        " passwords) so it starts already signed in to sites like Workday.",
+        style="info",
+    )
+    do_import = questionary.confirm(
+        "Import Chrome logins now?", default=True, style=_Q_STYLE
+    ).ask()
+    if not do_import:
+        console.print(
+            "[info]Skipped — you'll sign in manually the first time autofill"
+            " hits a login (it remembers after that).[/]\n"
+        )
+        return
+
+    state = _import_chrome_cookies()
+    if not state:
+        console.print(
+            "[yellow]Couldn't read Chrome cookies[/] — Chrome may not be"
+            " installed, or the cookie store is locked/encrypted on this"
+            " system. No problem: sign in manually the first time autofill"
+            " hits a login and it'll remember after that.\n"
+        )
+        return
+
+    cfg.seed_state_file.parent.mkdir(parents=True, exist_ok=True)
+    cfg.seed_state_file.write_text(json.dumps(state))
+    cfg.seed_state_file.chmod(0o600)
+    _capture("chrome_cookies_imported", {"cookie_count": len(state["cookies"])})
+    console.print(
+        f"[success]✓[/] Imported {len(state['cookies'])} cookies — they'll load"
+        " on your next run.\n"
+    )
+
+
 def _onboard() -> None:
     """Run the full first-time setup: profile, API key, extra files, then ingest."""
     _capture("onboarding_started")
@@ -1145,6 +1284,7 @@ def _onboard() -> None:
             " by running autofill again."
         )
     _onboard_files()
+    _onboard_browser_cookies()
     ingest()
     profile = retrieve(cfg.retrieval_query)
     if not profile.strip():
