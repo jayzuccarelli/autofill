@@ -32,7 +32,9 @@ Dev shortcut: `uv run autofill …` also works.
 - **Ingest:** Non-hidden files in `knowledge/` only; chunking tries four separators in order (`\n\n`, `\n`, `". "`, `" "`) to find a clean break point within `cfg.chunk_size` chars, with `cfg.chunk_overlap` overlap between consecutive chunks. PDFs via `pdfplumber`.
 - **Retrieve:** `retrieve(cfg.retrieval_query, n=cfg.retrieval_n)` — single query, **not** full-document paste. Both the query string and *n* live in the `Config` dataclass at the top of `agent.py`.
 - **Empty profile:** If nothing is indexed, `_onboard()` runs interactively. If still empty after onboarding, exits with `SystemExit` (no silent fabrication).
-- **browser-use:** `BrowserProfile(keep_alive=True, headless=False)`, `bu.Agent(task=..., llm=...)`. Upstream behavior and APIs: [browser-use](https://github.com/browser-use/browser-use).
+- **browser-use:** `BrowserProfile(keep_alive=True, headless=False, user_data_dir=cfg.browser_profile_dir)`, `bu.Agent(task=..., llm=...)`. The `user_data_dir` (`~/.autofill/browser-profile`) persists logins across runs — its path must not contain "chrome" or browser-use copies it to a temp dir and persistence breaks. Upstream behavior and APIs: [browser-use](https://github.com/browser-use/browser-use).
+- **Login walls:** the task prompt tells the agent to stop with a `LOGIN_REQUIRED` sentinel (never type credentials). `main()` detects it via `agent.history.final_result()`, pauses for the user to sign in manually, then rebuilds the agent on the same `browser_session` and re-runs on the same URL — up to two resumes.
+- **Chrome cookie seed (optional):** onboarding offers to import existing Chrome logins via `browser_cookie3` (`_import_chrome_cookies`), written to `~/.autofill/seed-cookies.json` in Playwright `storage_state` shape. The next run passes it as `BrowserProfile(storage_state=...)` so browser-use loads the cookies into the persistent profile, then deletes the seed file (one-time). Best-effort: silently no-ops if Chrome/cookies are unreadable, falling back to the manual login flow.
 
 ## Dev (optional)
 
