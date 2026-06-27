@@ -19,6 +19,7 @@ import chromadb
 import questionary
 from dotenv import load_dotenv
 from rich.console import Console
+from rich.live import Live
 from rich.progress import (
     BarColumn,
     MofNCompleteColumn,
@@ -234,15 +235,30 @@ _LOGO_LINES = [
     f"[{_L}]▀[/] [{_L}]▀[/] [{_L}]▀[/] [{_L}]▀[/]      [{_L}]▀[/] [{_L}]▀[/] [{_L}]▀[/] [{_L}]▀[/]",  # noqa: E501
 ]
 
+# Blink frame: eyes closed (dark fill where the white eyeballs sit).
+_LOGO_LINES_BLINK = list(_LOGO_LINES)
+_LOGO_LINES_BLINK[1] = (
+    f" [{_B}]██[/][{_D}]█▄▄▄█[/][{_B}]████[/][{_D}]█▄▄▄█[/][{_B}]██[/] "
+)
+_LOGO_LINES_BLINK[2] = (
+    f" [{_B}]██[/][{_D}]█████[/][{_D} on {_B}]▀▀▀▀[/][{_D}]█████[/][{_B}]██[/] "
+)
 
-def _banner(*info_lines: str) -> Table:
-    """Build a Claude-Code-style banner: pixel-art logo left, info text right."""
+# Wave frame: tentacles swap direction.
+_LOGO_LINES_WAVE = list(_LOGO_LINES)
+_LOGO_LINES_WAVE[5] = f"[{_B}]▀▄▀▄▀▄▀▄[/]    [{_B}]▄▀▄▀▄▀▄▀[/]"
+
+
+def _logo_text(lines: list[str]) -> Text:
     logo = Text()
-    for i, line in enumerate(_LOGO_LINES):
+    for i, line in enumerate(lines):
         if i:
             logo.append("\n")
         logo.append_text(Text.from_markup(line))
+    return logo
 
+
+def _banner_from(lines: list[str], info_lines: tuple[str, ...]) -> Table:
     info = Text()
     for i, line in enumerate(info_lines):
         if i:
@@ -252,8 +268,27 @@ def _banner(*info_lines: str) -> Table:
     table = Table(show_header=False, show_edge=False, box=None, padding=(0, 2))
     table.add_column(no_wrap=True)
     table.add_column(no_wrap=True)
-    table.add_row(logo, info)
+    table.add_row(_logo_text(lines), info)
     return table
+
+
+def _banner(*info_lines: str) -> Table:
+    """Build a Claude-Code-style banner: pixel-art logo left, info text right."""
+    return _banner_from(_LOGO_LINES, info_lines)
+
+
+def _play_intro(*info_lines: str) -> None:
+    """Briefly animate Phil before settling on the static banner."""
+    static = _banner(*info_lines)
+    if not console.is_terminal:
+        console.print(static)
+        return
+    frames = [_LOGO_LINES_BLINK, _LOGO_LINES, _LOGO_LINES_WAVE, _LOGO_LINES]
+    with Live(static, console=console, refresh_per_second=15, transient=False) as live:
+        time.sleep(0.18)
+        for frame in frames:
+            live.update(_banner_from(frame, info_lines))
+            time.sleep(0.14)
 
 
 def _detect_provider() -> str | None:
@@ -1221,10 +1256,10 @@ def cli() -> None:
     _capture("cli_invoked", {"provider": provider, "version": _VERSION})
 
     console.print()
-    console.print(_banner(
+    _play_intro(
         f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
         provider_line,
-    ))
+    )
     console.print()
     ingest()
     log_path = _setup_logging()
