@@ -1330,7 +1330,10 @@ def _uninstall() -> None:
         wrapper.unlink()
     if install_dir.exists():
         shutil.rmtree(install_dir)
-    console.print("[success]\u2713[/] autofill uninstalled.")
+    # Runs after irreversible deletion, so it must never crash: use builtin
+    # print, not rich, which measures glyph width and can fail on a broken
+    # unicode-width table and turn a successful uninstall into a traceback.
+    print("\u2713 autofill uninstalled.")
 
 
 def cli() -> None:
