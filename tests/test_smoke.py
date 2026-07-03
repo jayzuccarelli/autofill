@@ -199,7 +199,9 @@ class TestCookiejarToStorageState:
             discard=False, comment=None, comment_url=None, rest={},
         )
         defaults.update(kw)
-        return Cookie(**defaults)
+        # ty can't check **dict unpack against Cookie's typed signature; the
+        # runtime values above are correct.
+        return Cookie(**defaults)  # ty: ignore[invalid-argument-type]
 
     def test_basic_fields_map_through(self):
         state = _cookiejar_to_storage_state([self._cookie()])
