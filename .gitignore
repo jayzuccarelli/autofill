@@ -203,8 +203,21 @@ knowledge/*
 .autofill_install_id
 posthog-setup-report.md
 
-# Per-machine Claude Code settings
-.claude/settings.local.json
+# Agent workspace + local MCP wiring — never publish
+.claude/
+.mcp.json
+
+# Sandbox-injected / stray dotfiles at repo root
+.bash_profile
+.bashrc
+.gitconfig
+.profile
+.zshrc
+.zprofile
+.idea
+.vscode
+.gitmodules
+.ripgreprc
 
 # PyPI configuration file
 .pypirc
