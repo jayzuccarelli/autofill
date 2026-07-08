@@ -11,6 +11,7 @@ from autofill.agent import (
     _chunk_text,
     _cookiejar_to_storage_state,
     _detect_provider,
+    _diff_corrections,
     _key_fingerprint,
     _load_corrections,
     _save_corrections,
@@ -121,6 +122,61 @@ class TestCorrectionsRoundtrip:
             {"password": {"agent": "x", "user": "y"}},
         )
         assert not tmp_corrections.exists()
+
+    def test_save_filters_by_label_not_just_key(self, tmp_corrections):
+        # Benign key, sensitive label — must still be stripped.
+        _save_corrections(
+            "https://example.com/form",
+            {"field_7": {"label": "Social Security", "agent": "1", "user": "2"}},
+        )
+        assert not tmp_corrections.exists()
+
+    def test_new_shape_renders_label_and_value(self, tmp_corrections):
+        _save_corrections(
+            "https://example.com/form",
+            {"legal-name": {"label": "Legal Name", "agent": "Jay", "user": "Eugenio"}},
+        )
+        loaded = _load_corrections("https://example.com/form")
+        assert "Legal Name" in loaded  # display label, not the semantic key
+        assert "Eugenio" in loaded
+        assert "legal-name" not in loaded
+
+    def test_cleared_field_renders_leave_blank(self, tmp_corrections):
+        _save_corrections(
+            "https://example.com/form",
+            {"middle-name": {"label": "Middle Name", "agent": "Q", "user": ""}},
+        )
+        loaded = _load_corrections("https://example.com/form")
+        assert "Middle Name" in loaded
+        assert "BLANK" in loaded
+
+
+class TestDiffCorrections:
+    def test_keeps_change_drops_noop_and_unchanged(self):
+        agent = {
+            "a": {"label": "A", "value": "x"},
+            "b": {"label": "B", "value": ""},
+            "c": {"label": "C", "value": "same"},
+        }
+        user = {
+            "a": {"label": "A", "value": "y"},       # changed
+            "b": {"label": "B", "value": ""},        # no-op (both empty)
+            "c": {"label": "C", "value": "same"},    # unchanged
+        }
+        out = _diff_corrections(agent, user)
+        assert set(out) == {"a"}
+        assert out["a"] == {"label": "A", "agent": "x", "user": "y"}
+
+    def test_keeps_deletion_as_strongest_signal(self):
+        agent = {"phone": {"label": "Phone", "value": "555-1234"}}
+        user = {"phone": {"label": "Phone", "value": ""}}  # user cleared it
+        out = _diff_corrections(agent, user)
+        assert out == {"phone": {"label": "Phone", "agent": "555-1234", "user": ""}}
+
+    def test_user_field_absent_from_baseline_counts_as_new(self):
+        # Field first seen on page 2 (no baseline) that the user fills.
+        out = _diff_corrections({}, {"extra": {"label": "Extra", "value": "v"}})
+        assert out == {"extra": {"label": "Extra", "agent": "", "user": "v"}}
 
 
 class TestDetectProvider:

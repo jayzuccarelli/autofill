@@ -11,7 +11,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, cast
 from urllib.parse import urlparse
 
 import browser_use as bu
@@ -541,150 +541,230 @@ def _llm(provider: str) -> Any:
     )
 
 
-_FORM_TAGS = frozenset({"input", "textarea", "select"})
-_FORM_ROLES = frozenset({"textbox", "combobox", "listbox", "spinbutton", "searchbox",
-                          "radio", "checkbox", "switch"})
+# ---------------------------------------------------------------------------
+# Field capture: a full-DOM CDP collector for the baseline snapshot, plus an
+# event-driven listener that pushes each user edit as it happens. Both embed the
+# shared JS helpers below so the baseline and the live tracker key a field the
+# same way.
+
+# Shared JS helpers (embedded in both _COLLECT_JS and _LISTENER_JS):
+#   SEL      — form controls + ARIA widgets + contenteditable we track
+#   labelFor — human label: aria-label → aria-labelledby → <label for> →
+#              wrapping <label> → placeholder
+#   keyFor   — stable identity: autocomplete token → name → id → label. Survives
+#              re-renders that reorder fields (unlike a positional label suffix).
+#   valueOf  — current value: .checked / aria-checked for toggles, selected
+#              option text for custom dropdowns, textContent for contenteditable,
+#              else .value
+_FIELD_JS_HELPERS = r"""
+const SEL = 'input,textarea,select,[role="textbox"],[role="combobox"],' +
+  '[role="listbox"],[role="spinbutton"],[role="searchbox"],[role="radio"],' +
+  '[role="checkbox"],[role="switch"],[contenteditable="true"]';
+const labelFor = (el) => {
+  const al = el.getAttribute('aria-label'); if (al) return al.trim();
+  const lb = el.getAttribute('aria-labelledby');
+  if (lb) {
+    const t = lb.split(/\s+/).map(function(id){
+      const n = document.getElementById(id); return n ? n.textContent : '';
+    }).join(' ').trim();
+    if (t) return t;
+  }
+  if (el.id) {
+    try {
+      const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+      if (l) return l.textContent.trim();
+    } catch (e) {}
+  }
+  const anc = el.closest ? el.closest('label') : null;
+  if (anc) return anc.textContent.trim();
+  return (el.getAttribute('placeholder') || '').trim();
+};
+const keyFor = (el, label) => {
+  const ac = el.getAttribute('autocomplete');
+  if (ac && ac !== 'off' && ac !== 'on') return ac;
+  return el.getAttribute('name') || el.id || label;
+};
+const valueOf = (el) => {
+  const role = (el.getAttribute('role') || '').toLowerCase();
+  if (el.matches && el.matches('input[type="checkbox"],input[type="radio"]')) {
+    return el.checked ? 'true' : 'false';
+  }
+  if (role === 'radio' || role === 'checkbox' || role === 'switch') {
+    return el.getAttribute('aria-checked') || 'false';
+  }
+  if (el.tagName === 'SELECT') return el.value || '';
+  if (el.isContentEditable) return (el.textContent || '').trim();
+  if (role === 'combobox' || role === 'listbox') {
+    if (el.value) return el.value;
+    const s = el.querySelector ?
+      el.querySelector('[aria-selected="true"]') : null;
+    return s ? s.textContent.trim() : '';
+  }
+  return el.value != null ? el.value : '';
+};
+"""
+
+# Walk the whole DOM (light + open shadow roots + same-origin iframes) and return
+# JSON [{key,label,value}]. Bypasses browser-use's viewport-filtered selector_map,
+# which only surfaced fields the agent could act on (Greenhouse reported 1 of N).
+# Cross-origin iframes are skipped — job-application forms are same-origin.
+_COLLECT_JS = "(() => {" + _FIELD_JS_HELPERS + r"""
+const out = [], seen = new Set();
+const walk = (root) => {
+  let nodes; try { nodes = root.querySelectorAll(SEL); } catch (e) { return; }
+  for (const el of nodes) {
+    if (seen.has(el) || el.disabled || el.type === 'hidden' ||
+        el.type === 'password') continue;
+    seen.add(el);
+    const label = labelFor(el);
+    out.push({ key: keyFor(el, label), label: label, value: valueOf(el) });
+  }
+  for (const el of root.querySelectorAll('*')) {
+    if (el.shadowRoot) walk(el.shadowRoot);
+  }
+  for (const f of root.querySelectorAll('iframe')) {
+    try { if (f.contentDocument) walk(f.contentDocument); } catch (e) {}
+  }
+};
+walk(document);
+return JSON.stringify(out);
+})()"""
+
+# Installed once via Page.addScriptToEvaluateOnNewDocument (re-runs on every
+# navigation, so multi-page forms keep reporting) plus a one-off inject into the
+# current document. Pushes each completed edit through the __autofill_report
+# binding. `change` covers selects/checkboxes; `focusout` catches typed text in
+# inputs that never fire `change`. Passwords are never reported.
+_LISTENER_JS = "(() => {" + _FIELD_JS_HELPERS + r"""
+if (window.__autofillListenerInstalled) return;
+window.__autofillListenerInstalled = true;
+const report = (el) => {
+  if (!el || !el.matches || !el.matches(SEL)) return;
+  if (el.disabled || el.type === 'hidden' || el.type === 'password') return;
+  const label = labelFor(el);
+  try {
+    window.__autofill_report(JSON.stringify(
+      { key: keyFor(el, label), label: label, value: valueOf(el) }
+    ));
+  } catch (e) {}
+};
+const handler = (ev) => report(ev.composedPath ? ev.composedPath()[0] : ev.target);
+document.addEventListener('change', handler, { capture: true });
+document.addEventListener('focusout', handler, { capture: true });
+})()"""
 
 
 async def _snapshot_fields(session) -> dict:
-    """Snapshot form field values using browser-use's DOM + CDP value reads.
+    """Return ``{key: {"label", "value"}}`` for every field in the DOM.
 
-    **Field discovery and labeling** — browser-use's accessibility tree
-    (``get_browser_state_summary``).  Labels come from the browser's own
-    accessible-name computation, which works on every site.
-
-    **Live values** — CDP ``DOM.resolveNode`` + ``Runtime.callFunctionOn``
-    to read the JS ``.value`` property for each field.  HTML attributes
-    don't update when users type, but ``.value`` does.
+    One CDP ``Runtime.evaluate`` runs :data:`_COLLECT_JS`, which walks the whole
+    document (not browser-use's viewport-filtered selector_map), so below-the-fold
+    and shadow-DOM fields are captured too. Fields are keyed by stable identity
+    (autocomplete/name/id), not a positional label, so a saved correction still
+    lines up after the form re-renders. Sensitive fields are dropped.
     """
     try:
-        state = await session.get_browser_state_summary(include_screenshot=False)
-        if not state or not state.dom_state or not state.dom_state.selector_map:
-            return {}
-
         cdp_session = await session.get_or_create_cdp_session(focus=False)
-
-        result: dict[str, str] = {}
-        # Disambiguate repeated labels (multi-row employment history, duplicate
-        # "Address line", etc.) by suffixing "(2)", "(3)", …  Stable within a
-        # run and usually stable across runs on the same form.
-        seen_counts: dict[str, int] = {}
-        for _idx, node in state.dom_state.selector_map.items():
-            try:
-                tag = (node.tag_name or "").lower()
-                role = (node.ax_node.role or "").lower() if node.ax_node else ""
-
-                if tag not in _FORM_TAGS and role not in _FORM_ROLES:
-                    continue
-
-                attrs = node.attributes or {}
-
-                # Build label from accessibility name.
-                label = ""
-                if node.ax_node and node.ax_node.name:
-                    label = node.ax_node.name.strip()
-                if not label:
-                    label = (attrs.get("aria-label", "")
-                             or attrs.get("placeholder", "")
-                             or attrs.get("name", "")
-                             or attrs.get("id", "")
-                             or f"field_{_idx}")
-
-                # Skip sensitive fields (passwords, OTP, card numbers, etc.)
-                if _SENSITIVE_FIELD_RE.search(label):
-                    continue
-
-                seen_counts[label] = seen_counts.get(label, 0) + 1
-                key = (
-                    label
-                    if seen_counts[label] == 1
-                    else f"{label} ({seen_counts[label]})"
-                )
-
-                # Read live value via CDP.
-                value = await _read_live_value(cdp_session, node.backend_node_id, role)
-                if value is not None:
-                    result[key] = value
-            except Exception:
-                continue
-        return result
+        result = await cdp_session.cdp_client.send.Runtime.evaluate(
+            {"expression": _COLLECT_JS, "returnByValue": True},
+            session_id=cdp_session.session_id,
+        )
+        raw = (result.get("result") or {}).get("value") or "[]"
+        fields = json.loads(raw)
     except Exception:
         return {}
 
-
-async def _read_live_value(cdp_session, backend_node_id: int, role: str) -> str | None:
-    """Read the current JS .value (or checked state) of a DOM node via CDP."""
-    try:
-        resolve_result = await cdp_session.cdp_client.send.DOM.resolveNode(
-            {"backendNodeId": backend_node_id},
-            session_id=cdp_session.session_id,
-        )
-        object_id = resolve_result.get("object", {}).get("objectId")
-        if not object_id:
-            return None
-
-        if role in ("checkbox", "radio", "switch"):
-            # Native inputs use .checked; ARIA widgets (e.g. div[role=radio])
-            # use the aria-checked attribute instead.
-            fn = (
-                "function() {"
-                "  if (typeof this.checked === 'boolean')"
-                "    return this.checked ? 'true' : 'false';"
-                "  var ac = this.getAttribute('aria-checked');"
-                "  if (ac) return ac;"
-                "  return 'false';"
-                "}"
-            )
-        elif role in ("combobox", "listbox"):
-            # Read both .value and aria-selected text for custom dropdowns.
-            fn = (
-                "function() {"
-                "  if (this.value) return this.value;"
-                "  var sel = this.querySelector('[aria-selected=\"true\"]');"
-                "  if (sel) return sel.textContent.trim();"
-                "  return '';"
-                "}"
-            )
-        else:
-            fn = "function() { return this.value || ''; }"
-
-        call_result = await cdp_session.cdp_client.send.Runtime.callFunctionOn(
-            {
-                "objectId": object_id,
-                "functionDeclaration": fn,
-                "returnByValue": True,
-            },
-            session_id=cdp_session.session_id,
-        )
-        return call_result.get("result", {}).get("value", "")
-    except Exception:
-        return None
+    out: dict[str, dict] = {}
+    for f in fields:
+        key = (f.get("key") or "").strip()
+        label = (f.get("label") or "").strip()
+        if (not key or _SENSITIVE_FIELD_RE.search(key)
+                or _SENSITIVE_FIELD_RE.search(label)):
+            continue
+        # Same-key collisions (e.g. two unlabelled fields sharing a name) collapse
+        # to the last occurrence — semantic keys make this rare, and it keeps the
+        # baseline consistent with the live listener, which can't know positions.
+        out[key] = {"label": label or key, "value": f.get("value", "")}
+    return out
 
 
-async def _poll_fields(session, snapshot: dict, interval: float = 1.0,
-                       timeout: float = 600, empty_exit_after: int = 5) -> None:
-    """Continuously update snapshot with current field values until *timeout*.
+def _diff_corrections(agent_snapshot: dict, user_snapshot: dict) -> dict:
+    """Diff the agent's baseline against the user's final field values.
 
-    Transient empty reads (mid-navigation, shadow DOM hiccups) are tolerated,
-    but *empty_exit_after* consecutive empty reads are treated as "user
-    navigated away / submitted" and stop the loop.
+    Both snapshots are ``{key: {"label", "value"}}``. Keeps genuine changes and
+    deletions (user cleared an agent-filled value — a "don't fill this" signal),
+    and drops no-ops where both sides are empty. Returns
+    ``{key: {"label", "agent", "user"}}``.
     """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-    empty_streak = 0
-    while loop.time() < deadline:
-        await asyncio.sleep(interval)
-        try:
-            current = await _snapshot_fields(session)
-        except Exception:
-            break
-        if current:
-            snapshot.update(current)
-            empty_streak = 0
-        else:
-            empty_streak += 1
-            if empty_streak >= empty_exit_after:
-                break
+    corrections: dict[str, dict] = {}
+    for key, u in user_snapshot.items():
+        a_val = agent_snapshot.get(key, {}).get("value", "")
+        u_val = u.get("value", "")
+        if a_val != u_val and (u_val or a_val):
+            corrections[key] = {
+                "label": u.get("label", key),
+                "agent": a_val,
+                "user": u_val,
+            }
+    return corrections
+
+
+async def _watch_fields(session, agent_snapshot: dict, user_snapshot: dict,
+                        url: str) -> dict:
+    """Track the user's edits via a CDP binding, then persist corrections.
+
+    Replaces the old poll loop. :data:`_LISTENER_JS` reports each completed edit
+    through the ``__autofill_report`` binding; ``_on_binding`` writes it into
+    *user_snapshot* live. We block on a single Enter prompt, then diff against
+    *agent_snapshot* and save in a ``finally`` — so Ctrl-C, a closed browser, or
+    a normal Enter all flush whatever was captured. Returns the corrections dict.
+    """
+    try:
+        cdp_session = await session.get_or_create_cdp_session(focus=False)
+        send = cdp_session.cdp_client.send
+        sid = cdp_session.session_id
+        await send.Runtime.enable(session_id=sid)
+        await send.Runtime.addBinding({"name": "__autofill_report"}, session_id=sid)
+
+        def _on_binding(event, session_id=None):
+            if event.get("name") != "__autofill_report":
+                return
+            try:
+                payload = json.loads(event.get("payload") or "{}")
+            except Exception:
+                return
+            key = (payload.get("key") or "").strip()
+            label = (payload.get("label") or "").strip()
+            if (not key or _SENSITIVE_FIELD_RE.search(key)
+                    or _SENSITIVE_FIELD_RE.search(label)):
+                return
+            user_snapshot[key] = {
+                "label": label or key,
+                "value": payload.get("value", ""),
+            }
+
+        cdp_session.cdp_client.register.Runtime.bindingCalled(_on_binding)
+        # addScriptToEvaluateOnNewDocument only affects FUTURE documents — inject
+        # into the page that's already open, too.
+        await send.Page.addScriptToEvaluateOnNewDocument(
+            {"source": _LISTENER_JS}, session_id=sid
+        )
+        await send.Runtime.evaluate({"expression": _LISTENER_JS}, session_id=sid)
+    except Exception as exc:
+        console.print(f"[err]Warning:[/] Could not start edit tracking: {exc}")
+
+    try:
+        # to_thread keeps the blocking prompt off the running event loop; edits
+        # already live in user_snapshot, so the finally flushes on any exit.
+        await asyncio.to_thread(
+            _ask,
+            "Review and edit the form in the browser, then press Enter here when done…",
+        )
+    finally:
+        corrections = _diff_corrections(agent_snapshot, user_snapshot)
+        if corrections:
+            _save_corrections(url, corrections)
+    return corrections
 
 
 def _load_corrections(url: str) -> str:
@@ -710,7 +790,16 @@ def _load_corrections(url: str) -> str:
             merged[field] = change
     lines = [f"Previously corrected fields on {domain}:"]
     for field, change in merged.items():
-        lines.append(f"- {field}: use '{change['user']}' (not '{change['agent']}')")
+        # New entries carry a display label; old ones keyed by label fall back to it.
+        label = change.get("label", field)
+        user_val = change.get("user", "")
+        if user_val:
+            agent_val = change.get("agent", "")
+            lines.append(f"- {label}: use '{user_val}' (not '{agent_val}')")
+        else:
+            lines.append(
+                f"- {label}: leave BLANK — the user cleared this; do NOT fill it"
+            )
     return "\n".join(lines)
 
 
@@ -732,7 +821,18 @@ def _save_corrections(url: str, corrections: dict) -> None:
     Sensitive fields (passwords, OTP, SSN, CVV, etc.) are stripped before
     writing so they are never persisted or later injected into an LLM prompt.
     """
-    safe = {k: v for k, v in corrections.items() if not _SENSITIVE_FIELD_RE.search(k)}
+    def _label(v: object) -> str:
+        if isinstance(v, dict):
+            lab = cast("dict[str, object]", v).get("label", "")
+            return lab if isinstance(lab, str) else ""
+        return ""
+
+    safe = {
+        k: v
+        for k, v in corrections.items()
+        if not _SENSITIVE_FIELD_RE.search(k)
+        and not _SENSITIVE_FIELD_RE.search(_label(v))
+    }
     if not safe:
         return
     entry = {
@@ -963,18 +1063,16 @@ Rules:
         break
     agent_run_elapsed = int(time.monotonic() - run_start)
     try:
-        # Snapshot what the agent filled, then poll for user edits until submit.
+        # Snapshot what the agent filled (full-DOM baseline), then track the
+        # user's live edits until they press Enter.
         console.print(
-            "\n[info]Capturing form state — please review and submit in the"
-            " browser.[/]"
+            "\n[info]Capturing form state — review and edit in the browser.[/]"
         )
         agent_snapshot: dict = {}
-        user_snapshot: dict = {}
         if agent.browser_session is not None:
             try:
                 agent_snapshot = await _snapshot_fields(agent.browser_session)
                 console.print(f"[dim]Tracking {len(agent_snapshot)} field(s)…[/]")
-                user_snapshot = dict(agent_snapshot)
             except Exception as exc:
                 console.print(f"[err]Warning:[/] Could not snapshot fields: {exc}")
 
@@ -990,19 +1088,17 @@ Rules:
                 },
             )
 
-        if agent.browser_session is not None and agent_snapshot:
+        corrections: dict = {}
+        if agent.browser_session is not None:
+            # Copy inner dicts so live edits never mutate the agent baseline.
+            user_snapshot = {k: dict(v) for k, v in agent_snapshot.items()}
             try:
-                await _poll_fields(agent.browser_session, user_snapshot)
+                corrections = await _watch_fields(
+                    agent.browser_session, agent_snapshot, user_snapshot, url
+                )
             except Exception as exc:
                 console.print(f"[err]Warning:[/] Could not track field changes: {exc}")
-
-        corrections = {
-            k: {"agent": agent_snapshot.get(k, ""), "user": v}
-            for k, v in user_snapshot.items()
-            if agent_snapshot.get(k) != v and v
-        }
         if corrections:
-            _save_corrections(url, corrections)
             _capture("corrections_saved", {"correction_count": len(corrections)})
             console.print(
                 f"[info]Saved {len(corrections)} correction(s) for next time.[/]"
