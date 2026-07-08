@@ -957,7 +957,12 @@ Rules:
                 "  Log in (or sign up) in the open browser window. Your session"
                 " is saved here, so you'll only do this once per site.\n"
             )
-            _ask("Press Enter once you're signed in and I'll continue…")
+            # main() runs under asyncio.run(); _ask() -> questionary .ask()
+            # calls asyncio.run() internally, which raises inside a running
+            # loop. Run it in a worker thread so prompt_toolkit gets its own.
+            await asyncio.to_thread(
+                _ask, "Press Enter once you're signed in and I'll continue…"
+            )
             agent = _build_agent(session=agent.browser_session)
             continue
         break
@@ -1018,9 +1023,16 @@ Rules:
                 await agent.browser_session.stop()
             except Exception:
                 pass
-        # One-time seed: now baked into the persistent profile, so drop it.
-        if seed_state:
-            cfg.seed_state_file.unlink(missing_ok=True)
+        # One-time seed: it's baked into the persistent profile now, and
+        # browser-use's storage watchdog keeps re-saving the live cookie jar
+        # back to it — plus .json.bak/.json.tmp rotations. Drop all three,
+        # unconditionally, so artifacts from a crashed earlier run get swept too.
+        for _seed_artifact in (
+            cfg.seed_state_file,
+            cfg.seed_state_file.with_suffix(".json.bak"),
+            cfg.seed_state_file.with_suffix(".json.tmp"),
+        ):
+            _seed_artifact.unlink(missing_ok=True)
 
 
 def _has_profile_content() -> bool:
@@ -1337,6 +1349,11 @@ def cli() -> None:
     """Parse arguments and dispatch to onboarding, status, or form fill."""
     os.chdir(Path(__file__).resolve().parent.parent)
     load_dotenv()
+    # browser-use's built-in telemetry is opt-out and would ship the task
+    # prompt (which embeds the user's profile PII), the form URL, and typed
+    # field values to browser-use's PostHog. Disable it before any Agent is
+    # built; setdefault honors an explicit user override.
+    os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
     _init_sentry()
     import argparse
     parser = argparse.ArgumentParser(description="AI-powered form autofill")
