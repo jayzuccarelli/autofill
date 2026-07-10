@@ -5,13 +5,16 @@ import json
 import pytest
 
 from autofill import __version__
+from autofill import agent as agent_mod
 from autofill.agent import (
     _PROVIDERS,
     _SENSITIVE_FIELD_RE,
     _chunk_text,
     _cookiejar_to_storage_state,
     _detect_provider,
+    _is_ambient_key,
     _key_fingerprint,
+    _llm,
     _load_corrections,
     _save_corrections,
     cfg,
@@ -184,6 +187,43 @@ class TestKeyFingerprint:
     def test_strips_whitespace_before_measuring(self, monkeypatch):
         monkeypatch.setenv(_PROVIDERS["openai"]["env"], "  wxyz9876  ")
         assert _key_fingerprint("openai") == "(…9876)"
+
+
+class TestIsAmbientKey:
+    """`_is_ambient_key` distinguishes a shell-exported key from a .env one."""
+
+    def test_true_when_env_name_in_snapshot(self, monkeypatch):
+        # ANTHROPIC_API_KEY was in the shell before .env loaded — ambient.
+        monkeypatch.setattr(
+            agent_mod, "_AMBIENT_ENV_KEYS", frozenset({"ANTHROPIC_API_KEY"})
+        )
+        assert _is_ambient_key("anthropic") is True
+
+    def test_false_when_env_name_absent(self, monkeypatch):
+        # browseruse key isn't in the snapshot — autofill wrote it to .env.
+        monkeypatch.setattr(
+            agent_mod, "_AMBIENT_ENV_KEYS", frozenset({"ANTHROPIC_API_KEY"})
+        )
+        assert _is_ambient_key("browseruse") is False
+
+    def test_false_for_keyless_provider(self, monkeypatch):
+        # Ollama has no API-key var, so it can never be ambient.
+        monkeypatch.setattr(
+            agent_mod, "_AMBIENT_ENV_KEYS", frozenset({"AUTOFILL_PROVIDER"})
+        )
+        assert _is_ambient_key("ollama") is False
+
+
+class TestModelOverride:
+    """AUTOFILL_*_MODEL env vars override the default model without a code edit."""
+
+    def test_anthropic_env_override(self, monkeypatch):
+        monkeypatch.setenv("AUTOFILL_ANTHROPIC_MODEL", "claude-test-xyz")
+        assert _llm("anthropic").model == "claude-test-xyz"
+
+    def test_anthropic_default_when_unset(self, monkeypatch):
+        monkeypatch.delenv("AUTOFILL_ANTHROPIC_MODEL", raising=False)
+        assert _llm("anthropic").model == cfg.anthropic_model
 
 
 class TestCookiejarToStorageState:

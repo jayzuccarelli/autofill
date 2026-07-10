@@ -35,6 +35,12 @@ from rich.theme import Theme
 from autofill.telemetry import init_sentry as _init_sentry
 from autofill.telemetry import track as _capture
 
+# Env-var NAMES present at import — the user's shell environment, captured
+# before cli() calls load_dotenv(). Lets onboarding tell an ambient key (e.g.
+# ANTHROPIC_API_KEY exported for Claude) apart from one autofill itself wrote to
+# .env, so it never silently adopts a key the user set for another tool.
+_AMBIENT_ENV_KEYS = frozenset(os.environ)
+
 
 @dataclass(frozen=True)
 class Config:
@@ -72,11 +78,16 @@ class Config:
     )
     retrieval_n: int = 5
 
-    # Models — bump these when upgrading provider SDKs.
-    # Cheap defaults: Haiku and gpt-4o-mini are ~5-10x cheaper than Sonnet/4o
-    # and sufficient for form-filling. Bump to Sonnet if accuracy drops.
-    anthropic_model: str = "claude-haiku-4-5-20251001"  # Anthropic Haiku
-    openai_model: str = "gpt-4o-mini"                   # OpenAI GPT-4o mini
+    # Models — bump when upgrading provider SDKs. Override any of these at
+    # runtime without editing code via AUTOFILL_ANTHROPIC_MODEL /
+    # AUTOFILL_OPENAI_MODEL / AUTOFILL_OLLAMA_MODEL.
+    # Sonnet 5 reliably emits browser-use's structured tool calls; Haiku 4.5
+    # drops the required `action` on real forms, so it can't be the default.
+    anthropic_model: str = "claude-sonnet-5"             # Anthropic Sonnet 5
+    # One-shot fallback: auto-engages on a provider/rate-limit error so a bad
+    # step recovers instead of hard-crashing "no fallback_llm configured".
+    anthropic_fallback_model: str = "claude-opus-4-8"    # Anthropic Opus 4.8
+    openai_model: str = "gpt-4o-mini"                    # OpenAI GPT-4o mini
     # Ollama default — 14B is the smallest size that fills real forms reliably.
     # Override via AUTOFILL_OLLAMA_MODEL env var or the onboarding prompt.
     ollama_model: str = "qwen2.5:14b"
@@ -340,6 +351,17 @@ def _key_fingerprint(provider: str) -> str:
     return f"(…{key[-4:]})"
 
 
+def _is_ambient_key(provider: str) -> bool:
+    """True if the provider's API-key var was in the shell before .env loaded.
+
+    An ambient key (e.g. ANTHROPIC_API_KEY exported for Claude) must not be
+    silently adopted as autofill's provider — the user may mean it for another
+    tool. Key-less providers (Ollama) are never ambient.
+    """
+    env = _PROVIDERS.get(provider, {}).get("env")
+    return bool(env) and env in _AMBIENT_ENV_KEYS
+
+
 def _client() -> chromadb.ClientAPI:
     """Return a persistent Chroma client, creating the DB directory if needed."""
     cfg.db_path.mkdir(parents=True, exist_ok=True)
@@ -525,10 +547,12 @@ def _llm(provider: str) -> Any:
     """Instantiate the chat model for the given *provider* name."""
     if provider == "anthropic":
         from browser_use.llm.anthropic.chat import ChatAnthropic
-        return ChatAnthropic(model=cfg.anthropic_model)
+        model = os.environ.get("AUTOFILL_ANTHROPIC_MODEL") or cfg.anthropic_model
+        return ChatAnthropic(model=model)
     if provider == "openai":
         from browser_use.llm.openai.chat import ChatOpenAI
-        return ChatOpenAI(model=cfg.openai_model)
+        model = os.environ.get("AUTOFILL_OPENAI_MODEL") or cfg.openai_model
+        return ChatOpenAI(model=model)
     if provider == "browseruse":
         return bu.ChatBrowserUse()
     if provider == "ollama":
@@ -911,6 +935,12 @@ Rules:
             use_judge=False,
             register_new_step_callback=_on_step,
         )
+        # A malformed step from a weak model — or a 429/5xx — otherwise
+        # hard-crashes the run ("no fallback_llm configured"). Give the Anthropic
+        # path a stronger model to switch to once, so a bad step recovers.
+        if provider == "anthropic":
+            from browser_use.llm.anthropic.chat import ChatAnthropic
+            kwargs["fallback_llm"] = ChatAnthropic(model=cfg.anthropic_fallback_model)
         if session is not None:
             kwargs["browser_session"] = session
         else:
@@ -1052,11 +1082,15 @@ def _has_profile_content() -> bool:
 
 
 def _ask(prompt: str, default: str = "") -> str:
-    """Show an interactive text prompt and return the stripped answer (or *default*)."""
+    """Show an interactive text prompt and return the stripped answer (or *default*).
+
+    Uses ``unsafe_ask`` so Ctrl-C raises ``KeyboardInterrupt`` (caught in ``cli``
+    to abort the whole run) instead of being swallowed and silently skipping to
+    the next question. ``EOFError`` (piped stdin exhausted) still yields *default*.
+    """
     try:
-        val = questionary.text(prompt, style=_Q_STYLE).ask()
-    except (EOFError, KeyboardInterrupt):
-        console.print()
+        val = questionary.text(prompt, style=_Q_STYLE).unsafe_ask()
+    except EOFError:
         val = None
     return (val or "").strip() or default
 
@@ -1161,7 +1195,11 @@ def _onboard_api_key() -> None:
     console.print(Rule("Provider", style="accent"))
 
     detected = _detect_provider()
-    if detected:
+    # Only fast-path a detected provider when its key isn't ambient. An ambient
+    # key — present in the shell before .env loaded, e.g. ANTHROPIC_API_KEY set
+    # for Claude — must be an explicit choice, not a default-Yes; otherwise a
+    # user who wants Browser Use silently gets Anthropic (JAY-93).
+    if detected and not _is_ambient_key(detected):
         detected_label = _PROVIDERS[detected]["label"].split(" (")[0]
         fp = _key_fingerprint(detected)
         fp_suffix = f" {fp}" if fp else ""
@@ -1180,7 +1218,7 @@ def _onboard_api_key() -> None:
         console.print(detected_msg)
         keep = questionary.confirm(
             f"Use {detected_label}{fp_suffix}?", default=True, style=_Q_STYLE
-        ).ask()
+        ).unsafe_ask()
         if keep:
             if os.environ.get("AUTOFILL_PROVIDER") != detected:
                 with open(cfg.env_file, "a") as f:
@@ -1191,6 +1229,17 @@ def _onboard_api_key() -> None:
             console.print(f"[success]✓[/] Using {detected_label}{fp_suffix}.\n")
             return
         console.print()
+    elif detected:
+        # Ambient key found — note it, but make the provider choice explicit
+        # rather than silently adopting a key set for another tool.
+        detected_label = _PROVIDERS[detected]["label"].split(" (")[0]
+        fp = _key_fingerprint(detected)
+        fp_part = f" [dim]{fp}[/]" if fp else ""
+        console.print(
+            f"\n  Found a [accent]{detected_label}[/] API key{fp_part} in your"
+            " shell — it may be meant for another tool, so autofill won't assume"
+            " it. Pick a provider:\n"
+        )
 
     names = list(_PROVIDERS)
     choices = [
@@ -1198,7 +1247,7 @@ def _onboard_api_key() -> None:
     ]
     provider = questionary.select(
         "Which LLM provider?", choices=choices, style=_Q_STYLE
-    ).ask()
+    ).unsafe_ask()
     if not provider:
         provider = "browseruse"
 
@@ -1219,6 +1268,18 @@ def _onboard_api_key() -> None:
         os.environ["AUTOFILL_PROVIDER"] = provider
         _capture("api_key_configured", {"provider": provider})
         console.print("[success]✓[/] Saved to .env\n")
+    elif os.environ.get(info["env"]):
+        # No new key pasted, but one is already in the environment — the user
+        # deliberately chose this ambient provider. Persist the choice so it's
+        # used explicitly on future runs instead of falling back to dict order.
+        with open(cfg.env_file, "a") as f:
+            f.write(f"AUTOFILL_PROVIDER={provider}\n")
+        cfg.env_file.chmod(0o600)
+        os.environ["AUTOFILL_PROVIDER"] = provider
+        _capture("api_key_configured", {"provider": provider, "source": "ambient"})
+        console.print(
+            f"[success]✓[/] Using your {info['env']} from the environment.\n"
+        )
     else:
         console.print("[info]Skipped — set an API key before running autofill.[/]\n")
 
@@ -1231,7 +1292,7 @@ def _onboard_files() -> None:
     )
     add = questionary.confirm(
         "Add files to knowledge/ now?", default=False, style=_Q_STYLE
-    ).ask()
+    ).unsafe_ask()
     if add:
         console.print(f"  Drop files into: [bold]{cfg.knowledge_dir.resolve()}[/]")
         _ask("Press Enter when done…")
@@ -1248,7 +1309,7 @@ def _onboard_browser_cookies() -> None:
     )
     do_import = questionary.confirm(
         "Import Chrome logins now?", default=True, style=_Q_STYLE
-    ).ask()
+    ).unsafe_ask()
     if not do_import:
         console.print(
             "[info]Skipped — you'll sign in manually the first time autofill"
@@ -1333,7 +1394,7 @@ def _uninstall() -> None:
 
     confirm = questionary.confirm(
         "Are you sure?", default=False, style=_Q_STYLE
-    ).ask()
+    ).unsafe_ask()
     if not confirm:
         console.print("[info]Cancelled.[/]")
         return
@@ -1349,6 +1410,16 @@ def _uninstall() -> None:
 
 
 def cli() -> None:
+    """Entry point — abort cleanly on Ctrl-C anywhere (onboarding prompts
+    included) with exit code 130 instead of dumping a KeyboardInterrupt traceback."""
+    try:
+        _run_cli()
+    except KeyboardInterrupt:
+        console.print("\n[info]Cancelled.[/]")
+        raise SystemExit(130)
+
+
+def _run_cli() -> None:
     """Parse arguments and dispatch to onboarding, status, or form fill."""
     os.chdir(Path(__file__).resolve().parent.parent)
     load_dotenv()
