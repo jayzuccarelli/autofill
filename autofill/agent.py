@@ -315,9 +315,11 @@ def _detect_provider() -> str | None:
     """Return the active provider, based on env vars.
 
     Honours an explicit ``AUTOFILL_PROVIDER`` choice (including key-less
-    providers like Ollama); otherwise falls back to the first provider whose
-    API key is present. Key-less providers are never auto-selected — the user
-    must opt in via ``AUTOFILL_PROVIDER``.
+    providers like Ollama); otherwise falls back to the first provider whose API
+    key is present *and not ambient*. An ambient key (exported in the shell, e.g.
+    ANTHROPIC_API_KEY for Claude) is never auto-adopted — the user must pick it
+    explicitly during setup, which persists AUTOFILL_PROVIDER. Key-less providers
+    are never auto-selected either.
     """
     saved = os.environ.get("AUTOFILL_PROVIDER", "").strip().lower()
     if saved in _PROVIDERS:
@@ -326,7 +328,7 @@ def _detect_provider() -> str | None:
             return saved
     for name, info in _PROVIDERS.items():
         env = info.get("env")
-        if env and os.environ.get(env):
+        if env and os.environ.get(env) and not _is_ambient_key(name):
             return name
     return None
 
@@ -1113,6 +1115,48 @@ def _parse_profile() -> dict[str, str]:
     return out
 
 
+# Canonical field order — used to append newly-set fields in edit mode.
+_PROFILE_FIELDS = (
+    "Full name", "Preferred Name", "Date of birth", "Email", "Phone",
+    "Location", "LinkedIn", "X", "GitHub", "About",
+)
+
+
+def _apply_profile_edits(original: str, values: dict[str, str]) -> str:
+    """Splice edited field *values* into *original*, preserving every other line.
+
+    A recognized ``- **Key:** value`` line is updated in place (or dropped if the
+    new value is blank); a newly-set field is appended after the last field line.
+    Hand-added sections, paragraphs, and unknown bullets are kept as-is, so
+    ``autofill setup`` never destroys content it doesn't understand.
+    """
+    seen: set[str] = set()
+    out: list[str] = []
+    last_field_idx = -1
+    for line in original.splitlines():
+        m = re.match(r"-\s+\*\*(.+?):\*\*", line)
+        key = m.group(1).strip() if m else None
+        if key in values:
+            seen.add(key)
+            if values[key]:
+                out.append(f"- **{key}:** {values[key]}")
+                last_field_idx = len(out) - 1
+            # blank new value -> drop the line
+        else:
+            out.append(line)
+            if key is not None:  # an unknown field the user added — keep it
+                last_field_idx = len(out) - 1
+    extra = [
+        f"- **{k}:** {values[k]}"
+        for k in _PROFILE_FIELDS
+        if k not in seen and values.get(k)
+    ]
+    if extra:
+        at = last_field_idx + 1 if last_field_idx >= 0 else len(out)
+        out[at:at] = extra
+    return "\n".join(out).rstrip("\n") + "\n"
+
+
 def _normalize_dob(raw: str) -> str | None:
     """Return *raw* as YYYY-MM-DD, ``""`` if blank, or None if unparseable."""
     raw = raw.strip()
@@ -1138,6 +1182,9 @@ def _ask_dob(default: str = "") -> str:
         console.print(
             "[err]Couldn't parse that date.[/] Try 1990-05-23 or 05/23/1990."
         )
+        # Drop a bad pre-filled default so a non-interactive stdin (EOF keeps
+        # returning `default`) resolves to a skip instead of spinning forever.
+        default = ""
 
 
 def _ask_email(default: str = "") -> str:
@@ -1147,6 +1194,7 @@ def _ask_email(default: str = "") -> str:
         if not email or "@" in email:
             return email
         console.print("[err]That doesn't look like an email[/] (needs an @).")
+        default = ""  # avoid an EOF re-prompt loop on a bad pre-filled default
 
 
 def _onboard_profile(edit: bool = False) -> None:
@@ -1183,30 +1231,32 @@ def _onboard_profile(edit: bool = False) -> None:
         default=cur.get("About", ""),
     )
 
-    lines = [f"# {name}\n"]
-    lines.append(f"- **Full name:** {name}")
-    if preferred:
-        lines.append(f"- **Preferred Name:** {preferred}")
-    if dob:
-        lines.append(f"- **Date of birth:** {dob}")
-    if email:
-        lines.append(f"- **Email:** {email}")
-    if phone:
-        lines.append(f"- **Phone:** {phone}")
-    if location:
-        lines.append(f"- **Location:** {location}")
-    if linkedin:
-        lines.append(f"- **LinkedIn:** {linkedin}")
-    if x_handle:
-        lines.append(f"- **X:** {x_handle}")
-    if github:
-        lines.append(f"- **GitHub:** {github}")
-    if summary:
-        lines.append(f"- **About:** {summary}")
-    lines.append("")
+    values = {
+        "Full name": name,
+        "Preferred Name": preferred,
+        "Date of birth": dob,
+        "Email": email,
+        "Phone": phone,
+        "Location": location,
+        "LinkedIn": linkedin,
+        "X": x_handle,
+        "GitHub": github,
+        "About": summary,
+    }
 
     cfg.knowledge_dir.mkdir(parents=True, exist_ok=True)
-    cfg.profile.write_text("\n".join(lines))
+    if edit and cfg.profile.is_file():
+        # Preserve hand-added sections/paragraphs — update only known fields.
+        cfg.profile.write_text(
+            _apply_profile_edits(cfg.profile.read_text(), values)
+        )
+    else:
+        lines = [f"# {name}\n", f"- **Full name:** {name}"]
+        for label, val in list(values.items())[1:]:
+            if val:
+                lines.append(f"- **{label}:** {val}")
+        lines.append("")
+        cfg.profile.write_text("\n".join(lines))
     _capture("profile_created")
     console.print(f"\n[success]✓[/] Saved to [bold]{cfg.profile}[/]")
     console.print(

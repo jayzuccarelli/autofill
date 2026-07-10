@@ -7,8 +7,10 @@ import pytest
 from autofill import __version__
 from autofill import agent as agent_mod
 from autofill.agent import (
+    _PROFILE_FIELDS,
     _PROVIDERS,
     _SENSITIVE_FIELD_RE,
+    _apply_profile_edits,
     _chunk_text,
     _cookiejar_to_storage_state,
     _detect_provider,
@@ -134,6 +136,9 @@ class TestDetectProvider:
         for info in _PROVIDERS.values():
             if info.get("env"):
                 monkeypatch.delenv(info["env"], raising=False)
+        # Treat nothing as ambient by default so these tests are deterministic
+        # regardless of what the test runner's own shell happens to export.
+        monkeypatch.setattr(agent_mod, "_AMBIENT_ENV_KEYS", frozenset())
 
     def test_returns_none_when_no_keys(self, monkeypatch):
         self._clear_keys(monkeypatch)
@@ -167,6 +172,23 @@ class TestDetectProvider:
         # Without AUTOFILL_PROVIDER=ollama, Ollama is not selected.
         self._clear_keys(monkeypatch)
         assert _detect_provider() is None
+
+    def test_ambient_key_not_auto_adopted(self, monkeypatch):
+        # A key exported in the shell (ambient) must not be auto-selected (JAY-93).
+        self._clear_keys(monkeypatch)
+        env = _PROVIDERS["anthropic"]["env"]
+        monkeypatch.setenv(env, "ak")
+        monkeypatch.setattr(agent_mod, "_AMBIENT_ENV_KEYS", frozenset({env}))
+        assert _detect_provider() is None
+
+    def test_explicit_provider_wins_even_if_key_ambient(self, monkeypatch):
+        # An explicit AUTOFILL_PROVIDER is honored despite the key being ambient.
+        self._clear_keys(monkeypatch)
+        env = _PROVIDERS["anthropic"]["env"]
+        monkeypatch.setenv(env, "ak")
+        monkeypatch.setattr(agent_mod, "_AMBIENT_ENV_KEYS", frozenset({env}))
+        monkeypatch.setenv("AUTOFILL_PROVIDER", "anthropic")
+        assert _detect_provider() == "anthropic"
 
 
 class TestKeyFingerprint:
@@ -276,6 +298,46 @@ class TestParseProfile:
             assert _parse_profile() == {}
         finally:
             object.__setattr__(cfg, "profile", type(cfg).profile)
+
+
+class TestApplyProfileEdits:
+    """`autofill setup` updates known fields but never destroys other content."""
+
+    def test_updates_field_and_preserves_extras(self):
+        original = (
+            "# Jane Doe\n\n"
+            "## Contact\n"
+            "- **Full name:** Jane Doe\n"
+            "- **Email:** jane@old.com\n"
+            "- **Nationality:** Italian\n\n"
+            "## Summary\n"
+            "Builder of things.\n"
+        )
+        values = {k: "" for k in _PROFILE_FIELDS}
+        values["Full name"] = "Jane Doe"
+        values["Email"] = "jane@new.com"
+        out = _apply_profile_edits(original, values)
+        assert "- **Email:** jane@new.com" in out
+        assert "jane@old.com" not in out
+        assert "- **Nationality:** Italian" in out  # unknown field preserved
+        assert "## Summary" in out and "Builder of things." in out
+        assert "## Contact" in out
+
+    def test_blank_value_drops_the_field_line(self):
+        original = "- **Full name:** Jane\n- **Phone:** 555\n"
+        values = {k: "" for k in _PROFILE_FIELDS}
+        values["Full name"] = "Jane"  # Phone left blank -> cleared
+        out = _apply_profile_edits(original, values)
+        assert "- **Full name:** Jane" in out
+        assert "Phone" not in out
+
+    def test_appends_newly_set_field(self):
+        original = "- **Full name:** Jane\n"
+        values = {k: "" for k in _PROFILE_FIELDS}
+        values["Full name"] = "Jane"
+        values["Email"] = "jane@x.com"
+        out = _apply_profile_edits(original, values)
+        assert "- **Email:** jane@x.com" in out
 
 
 class TestCookiejarToStorageState:
