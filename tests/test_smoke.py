@@ -16,6 +16,8 @@ from autofill.agent import (
     _key_fingerprint,
     _llm,
     _load_corrections,
+    _normalize_dob,
+    _parse_profile,
     _save_corrections,
     cfg,
 )
@@ -224,6 +226,56 @@ class TestModelOverride:
     def test_anthropic_default_when_unset(self, monkeypatch):
         monkeypatch.delenv("AUTOFILL_ANTHROPIC_MODEL", raising=False)
         assert _llm("anthropic").model == cfg.anthropic_model
+
+
+class TestNormalizeDob:
+    """`_normalize_dob` coerces common inputs to YYYY-MM-DD, '' , or None."""
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("1990-05-23", "1990-05-23"),
+            ("05/23/1990", "1990-05-23"),
+            ("May 23, 1990", "1990-05-23"),
+            ("23 May 1990", "1990-05-23"),
+            ("", ""),
+            ("   ", ""),
+        ],
+    )
+    def test_parses_or_blanks(self, raw, expected):
+        assert _normalize_dob(raw) == expected
+
+    def test_none_for_unparseable(self):
+        assert _normalize_dob("not a date") is None
+
+
+class TestParseProfile:
+    """`_parse_profile` reads back the `- **Key:** value` lines onboarding writes."""
+
+    def test_roundtrips_written_fields(self, tmp_path):
+        p = tmp_path / "profile.md"
+        p.write_text(
+            "# Jane Doe\n"
+            "- **Full name:** Jane Doe\n"
+            "- **Date of birth:** 1990-05-23\n"
+            "- **Email:** jane@example.com\n"
+        )
+        object.__setattr__(cfg, "profile", p)
+        try:
+            parsed = _parse_profile()
+        finally:
+            object.__setattr__(cfg, "profile", type(cfg).profile)
+        assert parsed["Full name"] == "Jane Doe"
+        assert parsed["Date of birth"] == "1990-05-23"
+        assert parsed["Email"] == "jane@example.com"
+        assert "Jane Doe" not in parsed  # the `# heading` line isn't a field
+
+    def test_empty_when_no_file(self, tmp_path):
+        object.__setattr__(cfg, "profile", tmp_path / "missing.md")
+        try:
+            assert _parse_profile() == {}
+        finally:
+            object.__setattr__(cfg, "profile", type(cfg).profile)
 
 
 class TestCookiejarToStorageState:

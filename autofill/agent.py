@@ -933,6 +933,10 @@ Rules:
             initial_actions=[{"navigate": {"url": url, "new_tab": False}}],
             available_file_paths=attachments or None,
             use_judge=False,
+            # Cap actions per step so the model observes page state between input
+            # batches instead of blind-batching fills (guards against values being
+            # concatenated into the wrong field / double-filled).
+            max_actions_per_step=3,
             register_new_step_callback=_on_step,
         )
         # A malformed step from a weak model — or a 429/5xx — otherwise
@@ -1084,36 +1088,100 @@ def _has_profile_content() -> bool:
 def _ask(prompt: str, default: str = "") -> str:
     """Show an interactive text prompt and return the stripped answer (or *default*).
 
-    Uses ``unsafe_ask`` so Ctrl-C raises ``KeyboardInterrupt`` (caught in ``cli``
-    to abort the whole run) instead of being swallowed and silently skipping to
-    the next question. ``EOFError`` (piped stdin exhausted) still yields *default*.
+    *default* is pre-loaded into the editable buffer (so ``autofill setup`` can
+    show current values to tweak), and is also the fallback if the answer is
+    blank. Uses ``unsafe_ask`` so Ctrl-C raises ``KeyboardInterrupt`` (caught in
+    ``cli`` to abort the whole run) instead of being swallowed and silently
+    skipping to the next question. ``EOFError`` (piped stdin) yields *default*.
     """
     try:
-        val = questionary.text(prompt, style=_Q_STYLE).unsafe_ask()
+        val = questionary.text(prompt, default=default, style=_Q_STYLE).unsafe_ask()
     except EOFError:
         val = None
     return (val or "").strip() or default
 
 
-def _onboard_profile() -> None:
-    """Walk the user through creating knowledge/profile.md if it doesn't exist."""
-    if _has_profile_content():
+def _parse_profile() -> dict[str, str]:
+    """Parse knowledge/profile.md's ``- **Key:** value`` lines into a dict."""
+    if not cfg.profile.is_file():
+        return {}
+    out: dict[str, str] = {}
+    for line in cfg.profile.read_text().splitlines():
+        m = re.match(r"-\s+\*\*(.+?):\*\*\s*(.*)", line)
+        if m:
+            out[m.group(1).strip()] = m.group(2).strip()
+    return out
+
+
+def _normalize_dob(raw: str) -> str | None:
+    """Return *raw* as YYYY-MM-DD, ``""`` if blank, or None if unparseable."""
+    raw = raw.strip()
+    if not raw:
+        return ""
+    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y",
+                "%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y"):
+        try:
+            return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
+        except ValueError:
+            continue
+    return None
+
+
+def _ask_dob(default: str = "") -> str:
+    """Ask for date of birth, re-prompting until it parses (Enter = skip)."""
+    while True:
+        dob = _normalize_dob(
+            _ask("Date of birth (YYYY-MM-DD, or Enter to skip)", default=default)
+        )
+        if dob is not None:
+            return dob
+        console.print(
+            "[err]Couldn't parse that date.[/] Try 1990-05-23 or 05/23/1990."
+        )
+
+
+def _ask_email(default: str = "") -> str:
+    """Ask for an email, re-prompting until it contains '@' (Enter = skip)."""
+    while True:
+        email = _ask("Email", default=default)
+        if not email or "@" in email:
+            return email
+        console.print("[err]That doesn't look like an email[/] (needs an @).")
+
+
+def _onboard_profile(edit: bool = False) -> None:
+    """Create knowledge/profile.md, or (edit=True) re-prompt pre-filled to fix it."""
+    if _has_profile_content() and not edit:
         return
 
+    cur = _parse_profile() if edit else {}
     console.print()
     console.print(Rule("Profile", style="accent"))
-    console.print("I need some info to fill forms on your behalf.\n", style="info")
+    console.print(
+        "Edit any field — Enter keeps the current value.\n" if edit
+        else "I need some info to fill forms on your behalf.\n",
+        style="info",
+    )
 
-    name = _ask("Full name")
-    preferred = _ask("Preferred Name (or Enter to skip)")
-    dob = _ask("Date of birth (YYYY-MM-DD, or Enter to skip)")
-    email = _ask("Email")
-    phone = _ask("Phone (or Enter to skip)")
-    location = _ask("Location (City, Country)")
-    linkedin = _ask("LinkedIn URL (or Enter to skip)")
-    x_handle = _ask("X / Twitter URL (or Enter to skip)")
-    github = _ask("GitHub URL (or Enter to skip)")
-    summary = _ask("One-line about yourself (work, education, interests)")
+    name = _ask("Full name", default=cur.get("Full name", ""))
+    preferred = _ask(
+        "Preferred Name (or Enter to skip)", default=cur.get("Preferred Name", "")
+    )
+    dob = _ask_dob(cur.get("Date of birth", ""))
+    email = _ask_email(cur.get("Email", ""))
+    phone = _ask("Phone (or Enter to skip)", default=cur.get("Phone", ""))
+    location = _ask("Location (City, Country)", default=cur.get("Location", ""))
+    linkedin = _ask(
+        "LinkedIn URL (or Enter to skip)", default=cur.get("LinkedIn", "")
+    )
+    x_handle = _ask(
+        "X / Twitter URL (or Enter to skip)", default=cur.get("X", "")
+    )
+    github = _ask("GitHub URL (or Enter to skip)", default=cur.get("GitHub", ""))
+    summary = _ask(
+        "One-line about yourself (work, education, interests)",
+        default=cur.get("About", ""),
+    )
 
     lines = [f"# {name}\n"]
     lines.append(f"- **Full name:** {name}")
@@ -1337,18 +1405,20 @@ def _onboard_browser_cookies() -> None:
     )
 
 
-def _onboard() -> None:
-    """Run the full first-time setup: profile, API key, extra files, then ingest."""
-    _capture("onboarding_started")
+def _onboard(edit: bool = False) -> None:
+    """Run first-time setup, or (edit=True) reconfigure: profile, key, files, ingest."""
+    _capture("onboarding_started", {"edit": edit})
     console.print()
     console.print(_banner(
         f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
         "",
-        "Looks like you're new here — starting setup.",
+        "Reconfiguring — Enter keeps current values."
+        if edit
+        else "Looks like you're new here — starting setup.",
     ))
     console.print()
 
-    _onboard_profile()
+    _onboard_profile(edit=edit)
     _onboard_api_key()
     if not _has_any_api_key():
         raise SystemExit(
@@ -1432,7 +1502,7 @@ def _run_cli() -> None:
     import argparse
     parser = argparse.ArgumentParser(description="AI-powered form autofill")
     parser.add_argument("command", nargs="?", default=None,
-                        help="URL of the form to fill, or 'uninstall'")
+                        help="URL of the form to fill, 'setup', or 'uninstall'")
     parser.add_argument(
         "--provider",
         choices=["anthropic", "openai", "browseruse", "ollama"],
@@ -1448,6 +1518,12 @@ def _run_cli() -> None:
         _uninstall()
         return
 
+    if args.command == "setup":
+        # Explicit reconfigure — re-run onboarding pre-filled with current values
+        # so a mistyped field (e.g. date of birth) or the provider can be fixed.
+        _onboard(edit=True)
+        return
+
     needs_setup = not _has_profile_content() or not _has_any_api_key()
 
     if not args.command:
@@ -1459,6 +1535,7 @@ def _run_cli() -> None:
                 f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
                 "",
                 "Usage: [bold]autofill '<url>'[/]",
+                "Reconfigure: [bold]autofill setup[/]",
             ))
         return
 
@@ -1471,7 +1548,7 @@ def _run_cli() -> None:
 
     if needs_setup:
         console.print(
-            "[err]Not set up yet.[/] Run [bold]autofill[/] first, then"
+            "[err]Not set up yet.[/] Run [bold]autofill setup[/] first, then"
             " [bold]autofill '<url>'[/]."
         )
         raise SystemExit(1)
