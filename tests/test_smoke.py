@@ -5,14 +5,21 @@ import json
 import pytest
 
 from autofill import __version__
+from autofill import agent as agent_mod
 from autofill.agent import (
+    _PROFILE_FIELDS,
     _PROVIDERS,
     _SENSITIVE_FIELD_RE,
+    _apply_profile_edits,
     _chunk_text,
     _cookiejar_to_storage_state,
     _detect_provider,
+    _is_ambient_key,
     _key_fingerprint,
+    _llm,
     _load_corrections,
+    _normalize_dob,
+    _parse_profile,
     _save_corrections,
     cfg,
 )
@@ -129,6 +136,9 @@ class TestDetectProvider:
         for info in _PROVIDERS.values():
             if info.get("env"):
                 monkeypatch.delenv(info["env"], raising=False)
+        # Treat nothing as ambient by default so these tests are deterministic
+        # regardless of what the test runner's own shell happens to export.
+        monkeypatch.setattr(agent_mod, "_AMBIENT_ENV_KEYS", frozenset())
 
     def test_returns_none_when_no_keys(self, monkeypatch):
         self._clear_keys(monkeypatch)
@@ -163,6 +173,23 @@ class TestDetectProvider:
         self._clear_keys(monkeypatch)
         assert _detect_provider() is None
 
+    def test_ambient_key_not_auto_adopted(self, monkeypatch):
+        # A key exported in the shell (ambient) must not be auto-selected (JAY-93).
+        self._clear_keys(monkeypatch)
+        env = _PROVIDERS["anthropic"]["env"]
+        monkeypatch.setenv(env, "ak")
+        monkeypatch.setattr(agent_mod, "_AMBIENT_ENV_KEYS", frozenset({env}))
+        assert _detect_provider() is None
+
+    def test_explicit_provider_wins_even_if_key_ambient(self, monkeypatch):
+        # An explicit AUTOFILL_PROVIDER is honored despite the key being ambient.
+        self._clear_keys(monkeypatch)
+        env = _PROVIDERS["anthropic"]["env"]
+        monkeypatch.setenv(env, "ak")
+        monkeypatch.setattr(agent_mod, "_AMBIENT_ENV_KEYS", frozenset({env}))
+        monkeypatch.setenv("AUTOFILL_PROVIDER", "anthropic")
+        assert _detect_provider() == "anthropic"
+
 
 class TestKeyFingerprint:
     def test_returns_masked_tail(self, monkeypatch):
@@ -184,6 +211,133 @@ class TestKeyFingerprint:
     def test_strips_whitespace_before_measuring(self, monkeypatch):
         monkeypatch.setenv(_PROVIDERS["openai"]["env"], "  wxyz9876  ")
         assert _key_fingerprint("openai") == "(…9876)"
+
+
+class TestIsAmbientKey:
+    """`_is_ambient_key` distinguishes a shell-exported key from a .env one."""
+
+    def test_true_when_env_name_in_snapshot(self, monkeypatch):
+        # ANTHROPIC_API_KEY was in the shell before .env loaded — ambient.
+        monkeypatch.setattr(
+            agent_mod, "_AMBIENT_ENV_KEYS", frozenset({"ANTHROPIC_API_KEY"})
+        )
+        assert _is_ambient_key("anthropic") is True
+
+    def test_false_when_env_name_absent(self, monkeypatch):
+        # browseruse key isn't in the snapshot — autofill wrote it to .env.
+        monkeypatch.setattr(
+            agent_mod, "_AMBIENT_ENV_KEYS", frozenset({"ANTHROPIC_API_KEY"})
+        )
+        assert _is_ambient_key("browseruse") is False
+
+    def test_false_for_keyless_provider(self, monkeypatch):
+        # Ollama has no API-key var, so it can never be ambient.
+        monkeypatch.setattr(
+            agent_mod, "_AMBIENT_ENV_KEYS", frozenset({"AUTOFILL_PROVIDER"})
+        )
+        assert _is_ambient_key("ollama") is False
+
+
+class TestModelOverride:
+    """AUTOFILL_*_MODEL env vars override the default model without a code edit."""
+
+    def test_anthropic_env_override(self, monkeypatch):
+        monkeypatch.setenv("AUTOFILL_ANTHROPIC_MODEL", "claude-test-xyz")
+        assert _llm("anthropic").model == "claude-test-xyz"
+
+    def test_anthropic_default_when_unset(self, monkeypatch):
+        monkeypatch.delenv("AUTOFILL_ANTHROPIC_MODEL", raising=False)
+        assert _llm("anthropic").model == cfg.anthropic_model
+
+
+class TestNormalizeDob:
+    """`_normalize_dob` coerces common inputs to YYYY-MM-DD, '' , or None."""
+
+    @pytest.mark.parametrize(
+        "raw,expected",
+        [
+            ("1990-05-23", "1990-05-23"),
+            ("05/23/1990", "1990-05-23"),
+            ("May 23, 1990", "1990-05-23"),
+            ("23 May 1990", "1990-05-23"),
+            ("", ""),
+            ("   ", ""),
+        ],
+    )
+    def test_parses_or_blanks(self, raw, expected):
+        assert _normalize_dob(raw) == expected
+
+    def test_none_for_unparseable(self):
+        assert _normalize_dob("not a date") is None
+
+
+class TestParseProfile:
+    """`_parse_profile` reads back the `- **Key:** value` lines onboarding writes."""
+
+    def test_roundtrips_written_fields(self, tmp_path):
+        p = tmp_path / "profile.md"
+        p.write_text(
+            "# Jane Doe\n"
+            "- **Full name:** Jane Doe\n"
+            "- **Date of birth:** 1990-05-23\n"
+            "- **Email:** jane@example.com\n"
+        )
+        object.__setattr__(cfg, "profile", p)
+        try:
+            parsed = _parse_profile()
+        finally:
+            object.__setattr__(cfg, "profile", type(cfg).profile)
+        assert parsed["Full name"] == "Jane Doe"
+        assert parsed["Date of birth"] == "1990-05-23"
+        assert parsed["Email"] == "jane@example.com"
+        assert "Jane Doe" not in parsed  # the `# heading` line isn't a field
+
+    def test_empty_when_no_file(self, tmp_path):
+        object.__setattr__(cfg, "profile", tmp_path / "missing.md")
+        try:
+            assert _parse_profile() == {}
+        finally:
+            object.__setattr__(cfg, "profile", type(cfg).profile)
+
+
+class TestApplyProfileEdits:
+    """`autofill setup` updates known fields but never destroys other content."""
+
+    def test_updates_field_and_preserves_extras(self):
+        original = (
+            "# Jane Doe\n\n"
+            "## Contact\n"
+            "- **Full name:** Jane Doe\n"
+            "- **Email:** jane@old.com\n"
+            "- **Nationality:** Italian\n\n"
+            "## Summary\n"
+            "Builder of things.\n"
+        )
+        values = {k: "" for k in _PROFILE_FIELDS}
+        values["Full name"] = "Jane Doe"
+        values["Email"] = "jane@new.com"
+        out = _apply_profile_edits(original, values)
+        assert "- **Email:** jane@new.com" in out
+        assert "jane@old.com" not in out
+        assert "- **Nationality:** Italian" in out  # unknown field preserved
+        assert "## Summary" in out and "Builder of things." in out
+        assert "## Contact" in out
+
+    def test_blank_value_drops_the_field_line(self):
+        original = "- **Full name:** Jane\n- **Phone:** 555\n"
+        values = {k: "" for k in _PROFILE_FIELDS}
+        values["Full name"] = "Jane"  # Phone left blank -> cleared
+        out = _apply_profile_edits(original, values)
+        assert "- **Full name:** Jane" in out
+        assert "Phone" not in out
+
+    def test_appends_newly_set_field(self):
+        original = "- **Full name:** Jane\n"
+        values = {k: "" for k in _PROFILE_FIELDS}
+        values["Full name"] = "Jane"
+        values["Email"] = "jane@x.com"
+        out = _apply_profile_edits(original, values)
+        assert "- **Email:** jane@x.com" in out
 
 
 class TestCookiejarToStorageState:

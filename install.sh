@@ -48,6 +48,18 @@ WRAPPER
       printf '\nexport PATH="$HOME/.local/bin:$PATH"\n' >> "$rc"
     fi
   done
+
+  # zsh globs '?' in an unquoted URL (its default nomatch) and aborts with
+  # "no matches found" before autofill ever runs. 'noglob' disables glob
+  # expansion for this command, so `autofill https://x?y=z` works unquoted.
+  # (bash passes '?' through literally, so it only needs this on zsh.)
+  if [[ "$current_shell" == "zsh" ]]; then
+    for rc in "${rc_files[@]}"; do
+      if ! grep -q "noglob autofill" "$rc" 2>/dev/null; then
+        printf "\nalias autofill='noglob autofill'\n" >> "$rc"
+      fi
+    done
+  fi
 }
 
 install_uv
