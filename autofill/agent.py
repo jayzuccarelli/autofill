@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import browser_use as bu
 import chromadb
 import questionary
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from rich.console import Console
 from rich.live import Live
 from rich.progress import (
@@ -111,26 +111,32 @@ _UNPARSEABLE_SUFFIXES = frozenset({".doc"})
 # Provider registry. "env" is the API key env var, or None for providers that
 # don't take one (e.g. Ollama, which talks to a local server). "label" and
 # "url" are always strings — using Any to keep call sites typed as `str`.
+# "shared" marks an env var other tools also read, so finding one in the shell
+# says nothing about what autofill should use. BROWSER_USE_API_KEY is ours alone.
 _PROVIDERS: dict[str, dict[str, Any]] = {
     "browseruse": {
         "env": "BROWSER_USE_API_KEY",
-        "label": "Browser Use (default — cheapest, no extra deps)",
+        "label": "Browser Use (recommended)",
         "url": "https://cloud.browser-use.com/settings?tab=api-keys&new=1",
+        "shared": False,
     },
     "anthropic": {
         "env": "ANTHROPIC_API_KEY",
         "label": "Anthropic",
         "url": "https://console.anthropic.com/settings/keys",
+        "shared": True,
     },
     "openai": {
         "env": "OPENAI_API_KEY",
         "label": "OpenAI",
         "url": "https://platform.openai.com/api-keys",
+        "shared": True,
     },
     "ollama": {
         "env": None,
-        "label": "Ollama (local, experimental — needs 14B+ for good results)",
+        "label": "Ollama (local)",
         "url": "https://ollama.com/download",
+        "shared": False,
     },
 }
 
@@ -314,18 +320,31 @@ def _play_intro(*info_lines: str) -> None:
 def _detect_provider() -> str | None:
     """Return the active provider, based on env vars.
 
-    Honours an explicit ``AUTOFILL_PROVIDER`` choice (including key-less
-    providers like Ollama); otherwise falls back to the first provider whose API
-    key is present *and not ambient*. An ambient key (exported in the shell, e.g.
-    ANTHROPIC_API_KEY for Claude) is never auto-adopted — the user must pick it
-    explicitly during setup, which persists AUTOFILL_PROVIDER. Key-less providers
-    are never auto-selected either.
+    Cloud providers are *inferred* from which key is present, in _PROVIDERS
+    order: Browser Use, Anthropic, OpenAI. An ambient key (a shared var like
+    ANTHROPIC_API_KEY exported in the shell for another tool) is skipped — the
+    user must pick it explicitly. Ollama takes no key, so it is never inferred;
+    only an explicit ``AUTOFILL_PROVIDER=ollama`` selects it.
+
+    ``AUTOFILL_PROVIDER`` overrides all of it, but setup writes it only when
+    inference can't reach the user's choice — a stale one silently hijacks every
+    later run (internal ref).
     """
     saved = os.environ.get("AUTOFILL_PROVIDER", "").strip().lower()
     if saved in _PROVIDERS:
         env = _PROVIDERS[saved].get("env")
         if env is None or os.environ.get(env):
             return saved
+    return _infer_provider()
+
+
+def _infer_provider() -> str | None:
+    """The provider the present keys imply, ignoring any AUTOFILL_PROVIDER.
+
+    Separate from _detect_provider() so setup can ask "would the keys alone reach
+    this choice?" without the answer being coloured by the pointer it's deciding
+    whether to write.
+    """
     for name, info in _PROVIDERS.items():
         env = info.get("env")
         if env and os.environ.get(env) and not _is_ambient_key(name):
@@ -336,6 +355,20 @@ def _detect_provider() -> str | None:
 def _has_any_api_key() -> bool:
     """Return True if a provider is configured (API key present, or Ollama selected)."""
     return _detect_provider() is not None
+
+
+def _provider_ready(provider: str) -> bool:
+    """True if `provider` could run right now: its key is present, or it needs none.
+
+    Deliberately ignores the ambient check. That guard exists because a shell key
+    alone doesn't say which provider the user wants — but naming the provider
+    outright (``--provider anthropic``) is exactly the explicit choice it asks
+    for, so the key should be honoured rather than the flag ignored.
+    """
+    if provider not in _PROVIDERS:
+        return False
+    env = _PROVIDERS[provider].get("env")
+    return env is None or bool(os.environ.get(env))
 
 
 def _key_fingerprint(provider: str) -> str:
@@ -353,15 +386,32 @@ def _key_fingerprint(provider: str) -> str:
     return f"(…{key[-4:]})"
 
 
-def _is_ambient_key(provider: str) -> bool:
-    """True if the provider's API-key var was in the shell before .env loaded.
+def _env_file_keys() -> frozenset[str]:
+    """Names with a non-empty value in autofill's own .env — explicit config.
 
-    An ambient key (e.g. ANTHROPIC_API_KEY exported for Claude) must not be
-    silently adopted as autofill's provider — the user may mean it for another
-    tool. Key-less providers (Ollama) are never ambient.
+    Blank lines like ``ANTHROPIC_API_KEY=`` are how people disable a key while
+    keeping it around, so they must not count as configuring it: dotenv_values
+    still reports the name, and treating that as explicit would hand the ambient
+    guard back the very key the user just switched off.
     """
-    env = _PROVIDERS.get(provider, {}).get("env")
-    return bool(env) and env in _AMBIENT_ENV_KEYS
+    if not cfg.env_file.exists():
+        return frozenset()
+    return frozenset(k for k, v in dotenv_values(cfg.env_file).items() if v)
+
+
+def _is_ambient_key(provider: str) -> bool:
+    """True if the provider's key was in the shell and might belong to another tool.
+
+    Only *shared* vars can be ambient: ANTHROPIC_API_KEY is read by Claude and
+    plenty else, so exporting one says nothing about autofill. BROWSER_USE_API_KEY
+    is autofill's alone — wherever it came from, it was set for us. A key in
+    autofill's own .env is explicit config, never ambient.
+    """
+    info = _PROVIDERS.get(provider, {})
+    env = info.get("env")
+    if not env or not info.get("shared"):
+        return False
+    return env in _AMBIENT_ENV_KEYS and env not in _env_file_keys()
 
 
 def _client() -> chromadb.ClientAPI:
@@ -1277,22 +1327,67 @@ def _probe_ollama() -> bool:
         return False
 
 
+def _env_set(name: str, value: str | None) -> None:
+    """Set `name` to `value` in .env, or remove it entirely when value is None.
+
+    Replaces rather than appends. Appending leaves the old line behind, so a
+    pointer that should be gone lives on in the file and reappears the moment its
+    key does — and a file without a trailing newline gets the next line glued to
+    it.
+    """
+    if not cfg.env_file.exists():
+        if value is None:
+            return  # nothing to remove, and no reason to create the file
+        lines = []
+    else:
+        lines = [
+            ln
+            for ln in cfg.env_file.read_text().splitlines()
+            if not ln.strip().startswith(f"{name}=")
+        ]
+    if value is not None:
+        lines.append(f"{name}={value}")
+    cfg.env_file.write_text("\n".join(lines) + "\n" if lines else "")
+    cfg.env_file.chmod(0o600)
+
+
+def _persist_provider_choice(provider: str) -> None:
+    """Record `provider` — but only if the keys present don't already imply it.
+
+    The pointer outranks every key, so a redundant one is a loaded gun: confirm
+    Browser Use while a keyless ``AUTOFILL_PROVIDER=openai`` sits in .env and
+    OpenAI hijacks the day an OPENAI_API_KEY shows up. So it's removed whenever
+    inference already reaches the choice, and written only to break a genuine tie
+    (Ollama, which no key implies; or a shared shell key adopted on purpose).
+
+    Call *after* writing any key to .env, so inference sees it.
+    """
+    if _infer_provider() == provider:
+        _env_set("AUTOFILL_PROVIDER", None)
+        os.environ.pop("AUTOFILL_PROVIDER", None)
+        return
+    _env_set("AUTOFILL_PROVIDER", provider)
+    os.environ["AUTOFILL_PROVIDER"] = provider
+
+
 def _onboard_ollama() -> None:
     """Configure Ollama: prompt for model, probe the server, write .env."""
     url = _PROVIDERS["ollama"]["url"]
     console.print(f"\n  Install Ollama and pull a model: [accent]{url}[/]\n")
+    console.print("  [dim]Local and free, but needs a 14B+ model to fill well.[/]\n")
     model = _ask(
         f"Model name (Enter for default '{cfg.ollama_model}')",
         default=cfg.ollama_model,
     )
-    lines = ["AUTOFILL_PROVIDER=ollama\n"]
-    if model != cfg.ollama_model:
-        lines.append(f"AUTOFILL_OLLAMA_MODEL={model}\n")
-        os.environ["AUTOFILL_OLLAMA_MODEL"] = model
-    with open(cfg.env_file, "a") as f:
-        f.writelines(lines)
-    cfg.env_file.chmod(0o600)
+    # Ollama takes no API key, so nothing about the environment can imply it —
+    # the pointer is the only record of the choice and is always written. It also
+    # has to outrank any cloud key that shows up later: picking Ollama means
+    # keeping the data local, and a BROWSER_USE_API_KEY appearing next week is no
+    # reason to start shipping profile PII to a cloud model.
+    _env_set("AUTOFILL_PROVIDER", "ollama")
+    _env_set("AUTOFILL_OLLAMA_MODEL", model)
     os.environ["AUTOFILL_PROVIDER"] = "ollama"
+    os.environ["AUTOFILL_OLLAMA_MODEL"] = model
     _capture("api_key_configured", {"provider": "ollama"})
 
     if _probe_ollama():
@@ -1312,11 +1407,23 @@ def _onboard_api_key() -> None:
     console.print()
     console.print(Rule("Provider", style="accent"))
 
+    # A shell-exported AUTOFILL_PROVIDER outranks every key, and .env can't undo
+    # it — load_dotenv() keeps the shell's value — so nothing chosen below would
+    # stick. Say so rather than silently ignoring the answer (internal ref).
+    if "AUTOFILL_PROVIDER" in _AMBIENT_ENV_KEYS:
+        stale = os.environ.get("AUTOFILL_PROVIDER", "")
+        console.print(
+            f"\n  [err]Your shell exports AUTOFILL_PROVIDER={stale}[/], which"
+            " overrides whatever you pick here. Run [bold]unset"
+            " AUTOFILL_PROVIDER[/] and drop it from your shell profile,"
+            " otherwise this choice won't take effect.\n"
+        )
+
     detected = _detect_provider()
-    # Only fast-path a detected provider when its key isn't ambient. An ambient
-    # key — present in the shell before .env loaded, e.g. ANTHROPIC_API_KEY set
-    # for Claude — must be an explicit choice, not a default-Yes; otherwise a
-    # user who wants Browser Use silently gets Anthropic (internal ref).
+    # Confirm a detected provider rather than adopting it silently. Ambient keys
+    # (shared vars exported for another tool, e.g. ANTHROPIC_API_KEY for Claude)
+    # don't get even that — they're skipped, so a user who wants Browser Use
+    # never silently gets Anthropic (internal ref).
     if detected and not _is_ambient_key(detected):
         detected_label = _PROVIDERS[detected]["label"].split(" (")[0]
         fp = _key_fingerprint(detected)
@@ -1338,26 +1445,28 @@ def _onboard_api_key() -> None:
             f"Use {detected_label}{fp_suffix}?", default=True, style=_Q_STYLE
         ).unsafe_ask()
         if keep:
-            if os.environ.get("AUTOFILL_PROVIDER") != detected:
-                with open(cfg.env_file, "a") as f:
-                    f.write(f"AUTOFILL_PROVIDER={detected}\n")
-                cfg.env_file.chmod(0o600)
-                os.environ["AUTOFILL_PROVIDER"] = detected
+            # Normally a no-op — inference already reaches `detected`, so this
+            # writes nothing. It's here to clear a stale pointer that inference
+            # is currently outvoting but which would hijack the run the moment
+            # its key appeared.
+            _persist_provider_choice(detected)
             _capture("api_key_configured", {"provider": detected, "source": "detected"})
             console.print(f"[success]✓[/] Using {detected_label}{fp_suffix}.\n")
             return
         console.print()
-    elif detected:
-        # Ambient key found — note it, but make the provider choice explicit
-        # rather than silently adopting a key set for another tool.
-        detected_label = _PROVIDERS[detected]["label"].split(" (")[0]
-        fp = _key_fingerprint(detected)
-        fp_part = f" [dim]{fp}[/]" if fp else ""
-        console.print(
-            f"\n  Found a [accent]{detected_label}[/] API key{fp_part} in your"
-            " shell — it may be meant for another tool, so autofill won't assume"
-            " it. Pick a provider:\n"
-        )
+    else:
+        # Explain why a key that's sitting right there wasn't offered.
+        shared = [
+            _PROVIDERS[n]["label"].split(" (")[0]
+            for n in _PROVIDERS
+            if _is_ambient_key(n)
+        ]
+        if shared:
+            console.print(
+                f"\n  Your shell has a [accent]{' and '.join(shared)}[/] key, but"
+                " other tools read that variable too — so pick what autofill"
+                " should use:\n"
+            )
 
     names = list(_PROVIDERS)
     choices = [
@@ -1374,32 +1483,42 @@ def _onboard_api_key() -> None:
         return
 
     info = _PROVIDERS[provider]
-    console.print(f"\n  Get a key here: [accent]{info['url']}[/]\n")
+    existing = os.environ.get(info["env"])
+    if existing:
+        fp = _key_fingerprint(provider)
+        key = _ask(f"Paste a key, or Enter to use your shell's {info['env']} {fp}")
+    else:
+        console.print(f"\n  Get a key here: [accent]{info['url']}[/]\n")
+        key = _ask("Paste your API key (or Enter to skip)")
 
-    key = _ask("Paste your API key (or Enter to skip)")
     if key:
-        with open(cfg.env_file, "a") as f:
-            f.write(f"{info['env']}={key}\n")
-            f.write(f"AUTOFILL_PROVIDER={provider}\n")
-        cfg.env_file.chmod(0o600)
+        _env_set(info["env"], key)
         os.environ[info["env"]] = key
-        os.environ["AUTOFILL_PROVIDER"] = provider
+        _persist_provider_choice(provider)
         _capture("api_key_configured", {"provider": provider})
         console.print("[success]✓[/] Saved to .env\n")
-    elif os.environ.get(info["env"]):
-        # No new key pasted, but one is already in the environment — the user
-        # deliberately chose this ambient provider. Persist the choice so it's
-        # used explicitly on future runs instead of falling back to dict order.
-        with open(cfg.env_file, "a") as f:
-            f.write(f"AUTOFILL_PROVIDER={provider}\n")
-        cfg.env_file.chmod(0o600)
-        os.environ["AUTOFILL_PROVIDER"] = provider
+    elif existing:
+        # Nothing pasted, but a key is already in the environment. The user picked
+        # this provider on purpose, so record it if inference can't infer it.
+        _persist_provider_choice(provider)
         _capture("api_key_configured", {"provider": provider, "source": "ambient"})
         console.print(
             f"[success]✓[/] Using your {info['env']} from the environment.\n"
         )
     else:
-        console.print("[info]Skipped — set an API key before running autofill.[/]\n")
+        # No key for the pick — so it won't be used. Name what will be, rather
+        # than let a provider they just declined quietly take the run.
+        fallback = _infer_provider()
+        note = (
+            f" [bold]{_PROVIDERS[fallback]['label'].split(' (')[0]}[/] will be used"
+            " until you do."
+            if fallback
+            else ""
+        )
+        console.print(
+            f"[info]Skipped — set {info['env']} to use"
+            f" {_PROVIDERS[provider]['label'].split(' (')[0]}.{note}[/]\n"
+        )
 
 
 def _onboard_files() -> None:
@@ -1574,7 +1693,14 @@ def _run_cli() -> None:
         _onboard(edit=True)
         return
 
-    needs_setup = not _has_profile_content() or not _has_any_api_key()
+    # `--provider X` names the provider outright, so it settles the question the
+    # ambient guard exists to ask. Gating on _has_any_api_key() alone would send
+    # `--provider anthropic` to "Not set up yet" when the only ANTHROPIC_API_KEY
+    # is a shell export, ignoring the very flag the user reached for.
+    configured = (
+        _provider_ready(args.provider) if args.provider else _has_any_api_key()
+    )
+    needs_setup = not _has_profile_content() or not configured
 
     if not args.command:
         if needs_setup:
