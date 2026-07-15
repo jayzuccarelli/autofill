@@ -335,6 +335,16 @@ def _detect_provider() -> str | None:
         env = _PROVIDERS[saved].get("env")
         if env is None or os.environ.get(env):
             return saved
+    return _infer_provider()
+
+
+def _infer_provider() -> str | None:
+    """The provider the present keys imply, ignoring any AUTOFILL_PROVIDER.
+
+    Separate from _detect_provider() so setup can ask "would the keys alone reach
+    this choice?" without the answer being coloured by the pointer it's deciding
+    whether to write.
+    """
     for name, info in _PROVIDERS.items():
         env = info.get("env")
         if env and os.environ.get(env) and not _is_ambient_key(name):
@@ -1317,20 +1327,46 @@ def _probe_ollama() -> bool:
         return False
 
 
-def _persist_provider_choice(provider: str) -> None:
-    """Write AUTOFILL_PROVIDER only if inference alone wouldn't pick `provider`.
+def _env_set(name: str, value: str | None) -> None:
+    """Set `name` to `value` in .env, or remove it entirely when value is None.
 
-    Autofill infers the provider from which key is present, so the pointer is
-    normally redundant — and a stale one outranks every key, silently hijacking
-    later runs. Write it only to break a genuine tie: e.g. Ollama chosen while a
-    cloud key is present, or a shared shell key adopted on purpose. Call this
-    *after* writing any key to .env, so inference sees it.
+    Replaces rather than appends. Appending leaves the old line behind, so a
+    pointer that should be gone lives on in the file and reappears the moment its
+    key does — and a file without a trailing newline gets the next line glued to
+    it.
     """
-    if _detect_provider() == provider:
-        return
-    with open(cfg.env_file, "a") as f:
-        f.write(f"AUTOFILL_PROVIDER={provider}\n")
+    if not cfg.env_file.exists():
+        if value is None:
+            return  # nothing to remove, and no reason to create the file
+        lines = []
+    else:
+        lines = [
+            ln
+            for ln in cfg.env_file.read_text().splitlines()
+            if not ln.strip().startswith(f"{name}=")
+        ]
+    if value is not None:
+        lines.append(f"{name}={value}")
+    cfg.env_file.write_text("\n".join(lines) + "\n" if lines else "")
     cfg.env_file.chmod(0o600)
+
+
+def _persist_provider_choice(provider: str) -> None:
+    """Record `provider` — but only if the keys present don't already imply it.
+
+    The pointer outranks every key, so a redundant one is a loaded gun: confirm
+    Browser Use while a keyless ``AUTOFILL_PROVIDER=openai`` sits in .env and
+    OpenAI hijacks the day an OPENAI_API_KEY shows up. So it's removed whenever
+    inference already reaches the choice, and written only to break a genuine tie
+    (Ollama, which no key implies; or a shared shell key adopted on purpose).
+
+    Call *after* writing any key to .env, so inference sees it.
+    """
+    if _infer_provider() == provider:
+        _env_set("AUTOFILL_PROVIDER", None)
+        os.environ.pop("AUTOFILL_PROVIDER", None)
+        return
+    _env_set("AUTOFILL_PROVIDER", provider)
     os.environ["AUTOFILL_PROVIDER"] = provider
 
 
@@ -1348,10 +1384,8 @@ def _onboard_ollama() -> None:
     # has to outrank any cloud key that shows up later: picking Ollama means
     # keeping the data local, and a BROWSER_USE_API_KEY appearing next week is no
     # reason to start shipping profile PII to a cloud model.
-    with open(cfg.env_file, "a") as f:
-        f.write("AUTOFILL_PROVIDER=ollama\n")
-        f.write(f"AUTOFILL_OLLAMA_MODEL={model}\n")
-    cfg.env_file.chmod(0o600)
+    _env_set("AUTOFILL_PROVIDER", "ollama")
+    _env_set("AUTOFILL_OLLAMA_MODEL", model)
     os.environ["AUTOFILL_PROVIDER"] = "ollama"
     os.environ["AUTOFILL_OLLAMA_MODEL"] = model
     _capture("api_key_configured", {"provider": "ollama"})
@@ -1411,8 +1445,11 @@ def _onboard_api_key() -> None:
             f"Use {detected_label}{fp_suffix}?", default=True, style=_Q_STYLE
         ).unsafe_ask()
         if keep:
-            # No AUTOFILL_PROVIDER write: the user confirmed exactly what
-            # inference already returns, so the pointer would be dead weight.
+            # Normally a no-op — inference already reaches `detected`, so this
+            # writes nothing. It's here to clear a stale pointer that inference
+            # is currently outvoting but which would hijack the run the moment
+            # its key appeared.
+            _persist_provider_choice(detected)
             _capture("api_key_configured", {"provider": detected, "source": "detected"})
             console.print(f"[success]✓[/] Using {detected_label}{fp_suffix}.\n")
             return
@@ -1455,9 +1492,7 @@ def _onboard_api_key() -> None:
         key = _ask("Paste your API key (or Enter to skip)")
 
     if key:
-        with open(cfg.env_file, "a") as f:
-            f.write(f"{info['env']}={key}\n")
-        cfg.env_file.chmod(0o600)
+        _env_set(info["env"], key)
         os.environ[info["env"]] = key
         _persist_provider_choice(provider)
         _capture("api_key_configured", {"provider": provider})
@@ -1471,7 +1506,19 @@ def _onboard_api_key() -> None:
             f"[success]✓[/] Using your {info['env']} from the environment.\n"
         )
     else:
-        console.print("[info]Skipped — set an API key before running autofill.[/]\n")
+        # No key for the pick — so it won't be used. Name what will be, rather
+        # than let a provider they just declined quietly take the run.
+        fallback = _infer_provider()
+        note = (
+            f" [bold]{_PROVIDERS[fallback]['label'].split(' (')[0]}[/] will be used"
+            " until you do."
+            if fallback
+            else ""
+        )
+        console.print(
+            f"[info]Skipped — set {info['env']} to use"
+            f" {_PROVIDERS[provider]['label'].split(' (')[0]}.{note}[/]\n"
+        )
 
 
 def _onboard_files() -> None:

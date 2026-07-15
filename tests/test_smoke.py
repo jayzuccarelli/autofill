@@ -312,6 +312,43 @@ class TestIsAmbientKey:
         assert _is_ambient_key("ollama") is False
 
 
+class TestEnvSet:
+    """`.env` writes replace and remove, rather than piling up."""
+
+    def test_replaces_rather_than_appends(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("A=1\nAUTOFILL_PROVIDER=openai\nB=2\n")
+        agent_mod._env_set("AUTOFILL_PROVIDER", "browseruse")
+        assert (tmp_path / ".env").read_text() == (
+            "A=1\nB=2\nAUTOFILL_PROVIDER=browseruse\n"
+        )
+
+    def test_removes_when_value_is_none(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("A=1\nAUTOFILL_PROVIDER=openai\n")
+        agent_mod._env_set("AUTOFILL_PROVIDER", None)
+        assert (tmp_path / ".env").read_text() == "A=1\n"
+
+    def test_handles_missing_trailing_newline(self, monkeypatch, tmp_path):
+        # Appending to a file with no final newline glues lines together.
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("A=1")
+        agent_mod._env_set("B", "2")
+        assert (tmp_path / ".env").read_text() == "A=1\nB=2\n"
+
+    def test_creates_file_when_absent(self, monkeypatch, tmp_path):
+        monkeypatch.chdir(tmp_path)
+        agent_mod._env_set("A", "1")
+        assert (tmp_path / ".env").read_text() == "A=1\n"
+
+    def test_does_not_match_on_prefix(self, monkeypatch, tmp_path):
+        # AUTOFILL_PROVIDER must not eat AUTOFILL_PROVIDER_EXTRA.
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("AUTOFILL_PROVIDER_EXTRA=keep\n")
+        agent_mod._env_set("AUTOFILL_PROVIDER", None)
+        assert (tmp_path / ".env").read_text() == "AUTOFILL_PROVIDER_EXTRA=keep\n"
+
+
 class TestProviderReady:
     """`--provider X` is an explicit choice, so an ambient key must not block it."""
 
@@ -373,6 +410,22 @@ class TestPersistProviderChoice:
         agent_mod._persist_provider_choice("browseruse")
         assert not env_file.exists()
         assert "AUTOFILL_PROVIDER" not in os.environ
+
+    def test_removes_stale_pointer_inference_outvotes(self, monkeypatch, tmp_path):
+        # A keyless AUTOFILL_PROVIDER=openai is dormant, not harmless: inference
+        # outvotes it today, but it outranks every key the moment an OPENAI_API_KEY
+        # appears. Confirming Browser Use has to clear it, not just ignore it.
+        env_file = self._setup(monkeypatch, tmp_path)
+        env_file.write_text("AUTOFILL_PROVIDER=openai\nBROWSER_USE_API_KEY=bu-key\n")
+        monkeypatch.setenv(_PROVIDERS["browseruse"]["env"], "bu-key")
+        monkeypatch.setenv("AUTOFILL_PROVIDER", "openai")
+        agent_mod._persist_provider_choice("browseruse")
+        assert "AUTOFILL_PROVIDER" not in env_file.read_text()
+        assert "BROWSER_USE_API_KEY=bu-key" in env_file.read_text()
+        assert "AUTOFILL_PROVIDER" not in os.environ
+        # The latent hijack is gone: an OpenAI key appearing no longer flips it.
+        monkeypatch.setenv(_PROVIDERS["openai"]["env"], "oa-key")
+        assert _detect_provider() == "browseruse"
 
     def test_writes_pointer_to_break_a_real_tie(self, monkeypatch, tmp_path):
         # OpenAI chosen while a Browser Use key is also present: inference walks
