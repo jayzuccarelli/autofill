@@ -17,7 +17,7 @@ from urllib.parse import urlparse
 import browser_use as bu
 import chromadb
 import questionary
-from dotenv import load_dotenv
+from dotenv import dotenv_values, load_dotenv
 from rich.console import Console
 from rich.live import Live
 from rich.progress import (
@@ -83,11 +83,11 @@ class Config:
     # AUTOFILL_OPENAI_MODEL / AUTOFILL_OLLAMA_MODEL.
     # Sonnet 5 reliably emits browser-use's structured tool calls; Haiku 4.5
     # drops the required `action` on real forms, so it can't be the default.
-    anthropic_model: str = "claude-sonnet-5"             # Anthropic Sonnet 5
+    anthropic_model: str = "claude-sonnet-5"  # Anthropic Sonnet 5
     # One-shot fallback: auto-engages on a provider/rate-limit error so a bad
     # step recovers instead of hard-crashing "no fallback_llm configured".
-    anthropic_fallback_model: str = "claude-opus-4-8"    # Anthropic Opus 4.8
-    openai_model: str = "gpt-4o-mini"                    # OpenAI GPT-4o mini
+    anthropic_fallback_model: str = "claude-opus-4-8"  # Anthropic Opus 4.8
+    openai_model: str = "gpt-4o-mini"  # OpenAI GPT-4o mini
     # Ollama default — 14B is the smallest size that fills real forms reliably.
     # Override via AUTOFILL_OLLAMA_MODEL env var or the onboarding prompt.
     ollama_model: str = "qwen2.5:14b"
@@ -111,26 +111,32 @@ _UNPARSEABLE_SUFFIXES = frozenset({".doc"})
 # Provider registry. "env" is the API key env var, or None for providers that
 # don't take one (e.g. Ollama, which talks to a local server). "label" and
 # "url" are always strings — using Any to keep call sites typed as `str`.
+# "shared" marks an env var other tools also read, so finding one in the shell
+# says nothing about what autofill should use. BROWSER_USE_API_KEY is ours alone.
 _PROVIDERS: dict[str, dict[str, Any]] = {
     "browseruse": {
         "env": "BROWSER_USE_API_KEY",
-        "label": "Browser Use (default — cheapest, no extra deps)",
+        "label": "Browser Use (recommended)",
         "url": "https://cloud.browser-use.com/settings?tab=api-keys&new=1",
+        "shared": False,
     },
     "anthropic": {
         "env": "ANTHROPIC_API_KEY",
         "label": "Anthropic",
         "url": "https://console.anthropic.com/settings/keys",
+        "shared": True,
     },
     "openai": {
         "env": "OPENAI_API_KEY",
         "label": "OpenAI",
         "url": "https://platform.openai.com/api-keys",
+        "shared": True,
     },
     "ollama": {
         "env": None,
-        "label": "Ollama (local, experimental — needs 14B+ for good results)",
+        "label": "Ollama (local)",
         "url": "https://ollama.com/download",
+        "shared": False,
     },
 }
 
@@ -214,6 +220,7 @@ def _field_count_bucket(n: int) -> str:
 _ACCENT = "#7851A9"
 try:
     from importlib.metadata import version as _pkg_version
+
     _VERSION = _pkg_version("autofill")
 except Exception:
     _VERSION = "unknown"
@@ -238,11 +245,11 @@ _Q_STYLE = questionary.Style(
 )
 
 # Phil the octopus, rendered with unicode half-blocks.  Palette mirrors phil.svg.
-_B = "rgb(121,82,179)"    # body main
-_L = "rgb(162,132,185)"   # highlight / underside / tentacle tips
-_D = "rgb(42,24,69)"      # glasses frame
+_B = "rgb(121,82,179)"  # body main
+_L = "rgb(162,132,185)"  # highlight / underside / tentacle tips
+_D = "rgb(42,24,69)"  # glasses frame
 _W = "white"
-_P = "rgb(26,26,46)"      # pupil
+_P = "rgb(26,26,46)"  # pupil
 
 # Pixel-art markup below; wrapping would break the rendered layout.
 _LOGO_LINES = [
@@ -314,12 +321,15 @@ def _play_intro(*info_lines: str) -> None:
 def _detect_provider() -> str | None:
     """Return the active provider, based on env vars.
 
-    Honours an explicit ``AUTOFILL_PROVIDER`` choice (including key-less
-    providers like Ollama); otherwise falls back to the first provider whose API
-    key is present *and not ambient*. An ambient key (exported in the shell, e.g.
-    ANTHROPIC_API_KEY for Claude) is never auto-adopted — the user must pick it
-    explicitly during setup, which persists AUTOFILL_PROVIDER. Key-less providers
-    are never auto-selected either.
+    The provider is *inferred* from which key is present, in _PROVIDERS order:
+    Browser Use, Anthropic, OpenAI, Ollama. An ambient key (a shared var like
+    ANTHROPIC_API_KEY exported in the shell for another tool) is skipped — the
+    user must pick it explicitly. Ollama is inferred from AUTOFILL_OLLAMA_MODEL,
+    which setup writes.
+
+    ``AUTOFILL_PROVIDER`` overrides all of it, but setup only writes it when
+    inference can't reach the user's choice — a stale one silently hijacks every
+    later run (JAY-93).
     """
     saved = os.environ.get("AUTOFILL_PROVIDER", "").strip().lower()
     if saved in _PROVIDERS:
@@ -330,6 +340,8 @@ def _detect_provider() -> str | None:
         env = info.get("env")
         if env and os.environ.get(env) and not _is_ambient_key(name):
             return name
+    if os.environ.get("AUTOFILL_OLLAMA_MODEL"):
+        return "ollama"
     return None
 
 
@@ -353,15 +365,26 @@ def _key_fingerprint(provider: str) -> str:
     return f"(…{key[-4:]})"
 
 
-def _is_ambient_key(provider: str) -> bool:
-    """True if the provider's API-key var was in the shell before .env loaded.
+def _env_file_keys() -> frozenset[str]:
+    """Names set in autofill's own .env, which are explicit config by definition."""
+    if not cfg.env_file.exists():
+        return frozenset()
+    return frozenset(dotenv_values(cfg.env_file))
 
-    An ambient key (e.g. ANTHROPIC_API_KEY exported for Claude) must not be
-    silently adopted as autofill's provider — the user may mean it for another
-    tool. Key-less providers (Ollama) are never ambient.
+
+def _is_ambient_key(provider: str) -> bool:
+    """True if the provider's key was in the shell and might belong to another tool.
+
+    Only *shared* vars can be ambient: ANTHROPIC_API_KEY is read by Claude and
+    plenty else, so exporting one says nothing about autofill. BROWSER_USE_API_KEY
+    is autofill's alone — wherever it came from, it was set for us. A key in
+    autofill's own .env is explicit config, never ambient.
     """
-    env = _PROVIDERS.get(provider, {}).get("env")
-    return bool(env) and env in _AMBIENT_ENV_KEYS
+    info = _PROVIDERS.get(provider, {})
+    env = info.get("env")
+    if not env or not info.get("shared"):
+        return False
+    return env in _AMBIENT_ENV_KEYS and env not in _env_file_keys()
 
 
 def _client() -> chromadb.ClientAPI:
@@ -375,6 +398,7 @@ def _read(path: Path) -> str:
     suffix = path.suffix.lower()
     if suffix == ".pdf":
         import pdfplumber
+
         parts: list[str] = []
         total = 0
         with pdfplumber.open(path) as pdf:
@@ -389,6 +413,7 @@ def _read(path: Path) -> str:
         return "\n".join(parts)
     if suffix == ".docx":
         import docx2txt
+
         try:
             text = docx2txt.process(str(path)) or ""
         except Exception as exc:
@@ -397,9 +422,9 @@ def _read(path: Path) -> str:
                 f"as .docx ({exc.__class__.__name__}); skipping."
             )
             return ""
-        return text[:cfg.max_text_chars]
+        return text[: cfg.max_text_chars]
     text = path.read_text(encoding="utf-8", errors="replace")
-    return text[:cfg.max_text_chars]
+    return text[: cfg.max_text_chars]
 
 
 def _hash(path: Path) -> str:
@@ -451,7 +476,8 @@ def ingest() -> None:
             stored_hashes[fname] = str(meta["hash"])
 
     visible_files = [
-        path for path in sorted(cfg.knowledge_dir.iterdir())
+        path
+        for path in sorted(cfg.knowledge_dir.iterdir())
         if not path.name.startswith(".")
         and path.is_file()
         and path.name != "profile.example.md"
@@ -549,16 +575,19 @@ def _llm(provider: str) -> Any:
     """Instantiate the chat model for the given *provider* name."""
     if provider == "anthropic":
         from browser_use.llm.anthropic.chat import ChatAnthropic
+
         model = os.environ.get("AUTOFILL_ANTHROPIC_MODEL") or cfg.anthropic_model
         return ChatAnthropic(model=model)
     if provider == "openai":
         from browser_use.llm.openai.chat import ChatOpenAI
+
         model = os.environ.get("AUTOFILL_OPENAI_MODEL") or cfg.openai_model
         return ChatOpenAI(model=model)
     if provider == "browseruse":
         return bu.ChatBrowserUse()
     if provider == "ollama":
         from browser_use.llm.ollama.chat import ChatOllama
+
         model = os.environ.get("AUTOFILL_OLLAMA_MODEL") or cfg.ollama_model
         # host=None lets the ollama SDK use OLLAMA_HOST or default to localhost.
         return ChatOllama(model=model)
@@ -568,8 +597,18 @@ def _llm(provider: str) -> Any:
 
 
 _FORM_TAGS = frozenset({"input", "textarea", "select"})
-_FORM_ROLES = frozenset({"textbox", "combobox", "listbox", "spinbutton", "searchbox",
-                          "radio", "checkbox", "switch"})
+_FORM_ROLES = frozenset(
+    {
+        "textbox",
+        "combobox",
+        "listbox",
+        "spinbutton",
+        "searchbox",
+        "radio",
+        "checkbox",
+        "switch",
+    }
+)
 
 
 async def _snapshot_fields(session) -> dict:
@@ -610,11 +649,13 @@ async def _snapshot_fields(session) -> dict:
                 if node.ax_node and node.ax_node.name:
                     label = node.ax_node.name.strip()
                 if not label:
-                    label = (attrs.get("aria-label", "")
-                             or attrs.get("placeholder", "")
-                             or attrs.get("name", "")
-                             or attrs.get("id", "")
-                             or f"field_{_idx}")
+                    label = (
+                        attrs.get("aria-label", "")
+                        or attrs.get("placeholder", "")
+                        or attrs.get("name", "")
+                        or attrs.get("id", "")
+                        or f"field_{_idx}"
+                    )
 
                 # Skip sensitive fields (passwords, OTP, card numbers, etc.)
                 if _SENSITIVE_FIELD_RE.search(label):
@@ -687,8 +728,13 @@ async def _read_live_value(cdp_session, backend_node_id: int, role: str) -> str 
         return None
 
 
-async def _poll_fields(session, snapshot: dict, interval: float = 1.0,
-                       timeout: float = 600, empty_exit_after: int = 5) -> None:
+async def _poll_fields(
+    session,
+    snapshot: dict,
+    interval: float = 1.0,
+    timeout: float = 600,
+    empty_exit_after: int = 5,
+) -> None:
     """Continuously update snapshot with current field values until *timeout*.
 
     Transient empty reads (mid-navigation, shadow DOM hiccups) are tolerated,
@@ -804,17 +850,19 @@ def _cookiejar_to_storage_state(jar) -> dict:
     """
     cookies = []
     for c in jar:
-        cookies.append({
-            "name": c.name,
-            "value": c.value,
-            "domain": c.domain,
-            "path": c.path,
-            "expires": float(c.expires) if c.expires else -1,
-            "httpOnly": bool(c.has_nonstandard_attr("HttpOnly")),
-            "secure": bool(c.secure),
-            # cookielib doesn't expose SameSite; "Lax" is the browser default.
-            "sameSite": "Lax",
-        })
+        cookies.append(
+            {
+                "name": c.name,
+                "value": c.value,
+                "domain": c.domain,
+                "path": c.path,
+                "expires": float(c.expires) if c.expires else -1,
+                "httpOnly": bool(c.has_nonstandard_attr("HttpOnly")),
+                "secure": bool(c.secure),
+                # cookielib doesn't expose SameSite; "Lax" is the browser default.
+                "sameSite": "Lax",
+            }
+        )
     return {"cookies": cookies, "origins": []}
 
 
@@ -946,6 +994,7 @@ Rules:
         # path a stronger model to switch to once, so a bad step recovers.
         if provider == "anthropic":
             from browser_use.llm.anthropic.chat import ChatAnthropic
+
             kwargs["fallback_llm"] = ChatAnthropic(model=cfg.anthropic_fallback_model)
         if session is not None:
             kwargs["browser_session"] = session
@@ -956,11 +1005,14 @@ Rules:
         return agent
 
     agent = _build_agent()
-    _capture("form_fill_started", {
-        "provider": provider,
-        "has_attachments": bool(attachments),
-        "has_prior_corrections": bool(prior_corrections),
-    })
+    _capture(
+        "form_fill_started",
+        {
+            "provider": provider,
+            "has_attachments": bool(attachments),
+            "has_prior_corrections": bool(prior_corrections),
+        },
+    )
     timed_out = False
     # Pause-and-resume for login walls: the agent stops at a sign-in/sign-up
     # page (emitting LOGIN_REQUIRED), the user authenticates manually in the
@@ -972,11 +1024,14 @@ Rules:
                 await agent.run(max_steps=cfg.agent_max_steps)
         except TimeoutError:
             timed_out = True
-            _capture("form_fill_timed_out", {
-                "provider": provider,
-                "timeout_seconds": cfg.agent_timeout,
-                "last_step": last_step,
-            })
+            _capture(
+                "form_fill_timed_out",
+                {
+                    "provider": provider,
+                    "timeout_seconds": cfg.agent_timeout,
+                    "last_step": last_step,
+                },
+            )
             console.print(
                 f"\n[err]Agent timed out after {cfg.agent_timeout}s.[/] "
                 "The browser is still open — you can continue manually.",
@@ -986,7 +1041,7 @@ Rules:
         result = (agent.history.final_result() or "").strip()
         if result.startswith("LOGIN_REQUIRED") and attempt < 2:
             _capture("login_required", {"provider": provider, "attempt": attempt + 1})
-            note = result[len("LOGIN_REQUIRED"):].lstrip(" :-").strip()
+            note = result[len("LOGIN_REQUIRED") :].lstrip(" :-").strip()
             console.print(
                 f"\n[accent]Sign-in needed[/]"
                 f"{' — ' + note if note else '.'}\n"
@@ -1006,8 +1061,7 @@ Rules:
     try:
         # Snapshot what the agent filled, then poll for user edits until submit.
         console.print(
-            "\n[info]Capturing form state — please review and submit in the"
-            " browser.[/]"
+            "\n[info]Capturing form state — please review and submit in the browser.[/]"
         )
         agent_snapshot: dict = {}
         user_snapshot: dict = {}
@@ -1117,8 +1171,16 @@ def _parse_profile() -> dict[str, str]:
 
 # Canonical field order — used to append newly-set fields in edit mode.
 _PROFILE_FIELDS = (
-    "Full name", "Preferred Name", "Date of birth", "Email", "Phone",
-    "Location", "LinkedIn", "X", "GitHub", "About",
+    "Full name",
+    "Preferred Name",
+    "Date of birth",
+    "Email",
+    "Phone",
+    "Location",
+    "LinkedIn",
+    "X",
+    "GitHub",
+    "About",
 )
 
 
@@ -1162,8 +1224,16 @@ def _normalize_dob(raw: str) -> str | None:
     raw = raw.strip()
     if not raw:
         return ""
-    for fmt in ("%Y-%m-%d", "%m/%d/%Y", "%d/%m/%Y", "%m-%d-%Y",
-                "%B %d, %Y", "%b %d, %Y", "%d %B %Y", "%d %b %Y"):
+    for fmt in (
+        "%Y-%m-%d",
+        "%m/%d/%Y",
+        "%d/%m/%Y",
+        "%m-%d-%Y",
+        "%B %d, %Y",
+        "%b %d, %Y",
+        "%d %B %Y",
+        "%d %b %Y",
+    ):
         try:
             return datetime.strptime(raw, fmt).strftime("%Y-%m-%d")
         except ValueError:
@@ -1179,9 +1249,7 @@ def _ask_dob(default: str = "") -> str:
         )
         if dob is not None:
             return dob
-        console.print(
-            "[err]Couldn't parse that date.[/] Try 1990-05-23 or 05/23/1990."
-        )
+        console.print("[err]Couldn't parse that date.[/] Try 1990-05-23 or 05/23/1990.")
         # Drop a bad pre-filled default so a non-interactive stdin (EOF keeps
         # returning `default`) resolves to a skip instead of spinning forever.
         default = ""
@@ -1206,7 +1274,8 @@ def _onboard_profile(edit: bool = False) -> None:
     console.print()
     console.print(Rule("Profile", style="accent"))
     console.print(
-        "Edit any field — Enter keeps the current value.\n" if edit
+        "Edit any field — Enter keeps the current value.\n"
+        if edit
         else "I need some info to fill forms on your behalf.\n",
         style="info",
     )
@@ -1219,12 +1288,8 @@ def _onboard_profile(edit: bool = False) -> None:
     email = _ask_email(cur.get("Email", ""))
     phone = _ask("Phone (or Enter to skip)", default=cur.get("Phone", ""))
     location = _ask("Location (City, Country)", default=cur.get("Location", ""))
-    linkedin = _ask(
-        "LinkedIn URL (or Enter to skip)", default=cur.get("LinkedIn", "")
-    )
-    x_handle = _ask(
-        "X / Twitter URL (or Enter to skip)", default=cur.get("X", "")
-    )
+    linkedin = _ask("LinkedIn URL (or Enter to skip)", default=cur.get("LinkedIn", ""))
+    x_handle = _ask("X / Twitter URL (or Enter to skip)", default=cur.get("X", ""))
     github = _ask("GitHub URL (or Enter to skip)", default=cur.get("GitHub", ""))
     summary = _ask(
         "One-line about yourself (work, education, interests)",
@@ -1247,9 +1312,7 @@ def _onboard_profile(edit: bool = False) -> None:
     cfg.knowledge_dir.mkdir(parents=True, exist_ok=True)
     if edit and cfg.profile.is_file():
         # Preserve hand-added sections/paragraphs — update only known fields.
-        cfg.profile.write_text(
-            _apply_profile_edits(cfg.profile.read_text(), values)
-        )
+        cfg.profile.write_text(_apply_profile_edits(cfg.profile.read_text(), values))
     else:
         lines = [f"# {name}\n", f"- **Full name:** {name}"]
         for label, val in list(values.items())[1:]:
@@ -1268,6 +1331,7 @@ def _onboard_profile(edit: bool = False) -> None:
 def _probe_ollama() -> bool:
     """Return True if an Ollama server responds at OLLAMA_HOST (or localhost)."""
     import httpx
+
     host = os.environ.get("OLLAMA_HOST", "http://localhost:11434").rstrip("/")
     if not host.startswith(("http://", "https://")):
         host = f"http://{host}"
@@ -1277,22 +1341,38 @@ def _probe_ollama() -> bool:
         return False
 
 
+def _persist_provider_choice(provider: str) -> None:
+    """Write AUTOFILL_PROVIDER only if inference alone wouldn't pick `provider`.
+
+    Autofill infers the provider from which key is present, so the pointer is
+    normally redundant — and a stale one outranks every key, silently hijacking
+    later runs. Write it only to break a genuine tie: e.g. Ollama chosen while a
+    cloud key is present, or a shared shell key adopted on purpose. Call this
+    *after* writing any key to .env, so inference sees it.
+    """
+    if _detect_provider() == provider:
+        return
+    with open(cfg.env_file, "a") as f:
+        f.write(f"AUTOFILL_PROVIDER={provider}\n")
+    cfg.env_file.chmod(0o600)
+    os.environ["AUTOFILL_PROVIDER"] = provider
+
+
 def _onboard_ollama() -> None:
     """Configure Ollama: prompt for model, probe the server, write .env."""
     url = _PROVIDERS["ollama"]["url"]
     console.print(f"\n  Install Ollama and pull a model: [accent]{url}[/]\n")
+    console.print("  [dim]Local and free, but needs a 14B+ model to fill well.[/]\n")
     model = _ask(
         f"Model name (Enter for default '{cfg.ollama_model}')",
         default=cfg.ollama_model,
     )
-    lines = ["AUTOFILL_PROVIDER=ollama\n"]
-    if model != cfg.ollama_model:
-        lines.append(f"AUTOFILL_OLLAMA_MODEL={model}\n")
-        os.environ["AUTOFILL_OLLAMA_MODEL"] = model
+    # Always record the model: it's what identifies Ollama to _detect_provider().
     with open(cfg.env_file, "a") as f:
-        f.writelines(lines)
+        f.write(f"AUTOFILL_OLLAMA_MODEL={model}\n")
     cfg.env_file.chmod(0o600)
-    os.environ["AUTOFILL_PROVIDER"] = "ollama"
+    os.environ["AUTOFILL_OLLAMA_MODEL"] = model
+    _persist_provider_choice("ollama")
     _capture("api_key_configured", {"provider": "ollama"})
 
     if _probe_ollama():
@@ -1313,10 +1393,10 @@ def _onboard_api_key() -> None:
     console.print(Rule("Provider", style="accent"))
 
     detected = _detect_provider()
-    # Only fast-path a detected provider when its key isn't ambient. An ambient
-    # key — present in the shell before .env loaded, e.g. ANTHROPIC_API_KEY set
-    # for Claude — must be an explicit choice, not a default-Yes; otherwise a
-    # user who wants Browser Use silently gets Anthropic (JAY-93).
+    # Confirm a detected provider rather than adopting it silently. Ambient keys
+    # (shared vars exported for another tool, e.g. ANTHROPIC_API_KEY for Claude)
+    # don't get even that — they're skipped, so a user who wants Browser Use
+    # never silently gets Anthropic (JAY-93).
     if detected and not _is_ambient_key(detected):
         detected_label = _PROVIDERS[detected]["label"].split(" (")[0]
         fp = _key_fingerprint(detected)
@@ -1338,31 +1418,28 @@ def _onboard_api_key() -> None:
             f"Use {detected_label}{fp_suffix}?", default=True, style=_Q_STYLE
         ).unsafe_ask()
         if keep:
-            if os.environ.get("AUTOFILL_PROVIDER") != detected:
-                with open(cfg.env_file, "a") as f:
-                    f.write(f"AUTOFILL_PROVIDER={detected}\n")
-                cfg.env_file.chmod(0o600)
-                os.environ["AUTOFILL_PROVIDER"] = detected
+            # No AUTOFILL_PROVIDER write: the user confirmed exactly what
+            # inference already returns, so the pointer would be dead weight.
             _capture("api_key_configured", {"provider": detected, "source": "detected"})
             console.print(f"[success]✓[/] Using {detected_label}{fp_suffix}.\n")
             return
         console.print()
-    elif detected:
-        # Ambient key found — note it, but make the provider choice explicit
-        # rather than silently adopting a key set for another tool.
-        detected_label = _PROVIDERS[detected]["label"].split(" (")[0]
-        fp = _key_fingerprint(detected)
-        fp_part = f" [dim]{fp}[/]" if fp else ""
-        console.print(
-            f"\n  Found a [accent]{detected_label}[/] API key{fp_part} in your"
-            " shell — it may be meant for another tool, so autofill won't assume"
-            " it. Pick a provider:\n"
-        )
+    else:
+        # Explain why a key that's sitting right there wasn't offered.
+        shared = [
+            _PROVIDERS[n]["label"].split(" (")[0]
+            for n in _PROVIDERS
+            if _is_ambient_key(n)
+        ]
+        if shared:
+            console.print(
+                f"\n  Your shell has a [accent]{' and '.join(shared)}[/] key, but"
+                " other tools read that variable too — so pick what autofill"
+                " should use:\n"
+            )
 
     names = list(_PROVIDERS)
-    choices = [
-        questionary.Choice(title=_PROVIDERS[n]["label"], value=n) for n in names
-    ]
+    choices = [questionary.Choice(title=_PROVIDERS[n]["label"], value=n) for n in names]
     provider = questionary.select(
         "Which LLM provider?", choices=choices, style=_Q_STYLE
     ).unsafe_ask()
@@ -1374,30 +1451,28 @@ def _onboard_api_key() -> None:
         return
 
     info = _PROVIDERS[provider]
-    console.print(f"\n  Get a key here: [accent]{info['url']}[/]\n")
+    existing = os.environ.get(info["env"])
+    if existing:
+        fp = _key_fingerprint(provider)
+        key = _ask(f"Paste a key, or Enter to use your shell's {info['env']} {fp}")
+    else:
+        console.print(f"\n  Get a key here: [accent]{info['url']}[/]\n")
+        key = _ask("Paste your API key (or Enter to skip)")
 
-    key = _ask("Paste your API key (or Enter to skip)")
     if key:
         with open(cfg.env_file, "a") as f:
             f.write(f"{info['env']}={key}\n")
-            f.write(f"AUTOFILL_PROVIDER={provider}\n")
         cfg.env_file.chmod(0o600)
         os.environ[info["env"]] = key
-        os.environ["AUTOFILL_PROVIDER"] = provider
+        _persist_provider_choice(provider)
         _capture("api_key_configured", {"provider": provider})
         console.print("[success]✓[/] Saved to .env\n")
-    elif os.environ.get(info["env"]):
-        # No new key pasted, but one is already in the environment — the user
-        # deliberately chose this ambient provider. Persist the choice so it's
-        # used explicitly on future runs instead of falling back to dict order.
-        with open(cfg.env_file, "a") as f:
-            f.write(f"AUTOFILL_PROVIDER={provider}\n")
-        cfg.env_file.chmod(0o600)
-        os.environ["AUTOFILL_PROVIDER"] = provider
+    elif existing:
+        # Nothing pasted, but a key is already in the environment. The user
+        # picked this provider on purpose, so record it if inference can't infer it.
+        _persist_provider_choice(provider)
         _capture("api_key_configured", {"provider": provider, "source": "ambient"})
-        console.print(
-            f"[success]✓[/] Using your {info['env']} from the environment.\n"
-        )
+        console.print(f"[success]✓[/] Using your {info['env']} from the environment.\n")
     else:
         console.print("[info]Skipped — set an API key before running autofill.[/]\n")
 
@@ -1459,13 +1534,15 @@ def _onboard(edit: bool = False) -> None:
     """Run first-time setup, or (edit=True) reconfigure: profile, key, files, ingest."""
     _capture("onboarding_started", {"edit": edit})
     console.print()
-    console.print(_banner(
-        f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
-        "",
-        "Reconfiguring — Enter keeps current values."
-        if edit
-        else "Looks like you're new here — starting setup.",
-    ))
+    console.print(
+        _banner(
+            f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
+            "",
+            "Reconfiguring — Enter keeps current values."
+            if edit
+            else "Looks like you're new here — starting setup.",
+        )
+    )
     console.print()
 
     _onboard_profile(edit=edit)
@@ -1486,8 +1563,7 @@ def _onboard(edit: bool = False) -> None:
             "Add info to knowledge/profile.md and run autofill again."
         )
     console.print(
-        "[success]✓[/] Setup complete. Run [bold]autofill '<url>'[/] to fill"
-        " a form.\n"
+        "[success]✓[/] Setup complete. Run [bold]autofill '<url>'[/] to fill a form.\n"
     )
 
 
@@ -1550,18 +1626,21 @@ def _run_cli() -> None:
     os.environ.setdefault("ANONYMIZED_TELEMETRY", "false")
     _init_sentry()
     import argparse
+
     parser = argparse.ArgumentParser(description="AI-powered form autofill")
-    parser.add_argument("command", nargs="?", default=None,
-                        help="URL of the form to fill, 'setup', or 'uninstall'")
+    parser.add_argument(
+        "command",
+        nargs="?",
+        default=None,
+        help="URL of the form to fill, 'setup', or 'uninstall'",
+    )
     parser.add_argument(
         "--provider",
         choices=["anthropic", "openai", "browseruse", "ollama"],
         default=None,
         help="LLM provider (auto-detected from API key if omitted)",
     )
-    parser.add_argument(
-        "--version", action="version", version=f"autofill {_VERSION}"
-    )
+    parser.add_argument("--version", action="version", version=f"autofill {_VERSION}")
     args = parser.parse_args()
 
     if args.command == "uninstall":
@@ -1581,12 +1660,14 @@ def _run_cli() -> None:
             _onboard()
         else:
             console.print()
-            console.print(_banner(
-                f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
-                "",
-                "Usage: [bold]autofill '<url>'[/]",
-                "Reconfigure: [bold]autofill setup[/]",
-            ))
+            console.print(
+                _banner(
+                    f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
+                    "",
+                    "Usage: [bold]autofill '<url>'[/]",
+                    "Reconfigure: [bold]autofill setup[/]",
+                )
+            )
         return
 
     parsed = urlparse(args.command)

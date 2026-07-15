@@ -1,6 +1,7 @@
 """Smoke tests for pure helpers in autofill.agent."""
 
 import json
+import os
 
 import pytest
 
@@ -52,13 +53,32 @@ class TestChunkText:
 class TestSensitiveFieldRegex:
     @pytest.mark.parametrize(
         "field",
-        ["password", "Password", "PASSWORD", "passcode", "otp", "pin",
-         "ssn", "cvv", "cvc", "secret", "passport", "dob",
-         "card_number", "cardnumber", "card-number",
-         # Underscore-separated forms — these were silently slipping
-         # through under the old \b regex because _ is a word char.
-         "password_field", "auth_token", "account_number", "bank_routing",
-         "social_security", "passport_no", "date_of_birth"],
+        [
+            "password",
+            "Password",
+            "PASSWORD",
+            "passcode",
+            "otp",
+            "pin",
+            "ssn",
+            "cvv",
+            "cvc",
+            "secret",
+            "passport",
+            "dob",
+            "card_number",
+            "cardnumber",
+            "card-number",
+            # Underscore-separated forms — these were silently slipping
+            # through under the old \b regex because _ is a word char.
+            "password_field",
+            "auth_token",
+            "account_number",
+            "bank_routing",
+            "social_security",
+            "passport_no",
+            "date_of_birth",
+        ],
     )
     def test_matches_sensitive(self, field):
         assert _SENSITIVE_FIELD_RE.search(field), f"expected match: {field!r}"
@@ -111,12 +131,8 @@ class TestCorrectionsRoundtrip:
             object.__setattr__(cfg, "corrections_file", type(cfg).corrections_file)
 
     def test_load_filters_by_domain(self, tmp_corrections):
-        _save_corrections(
-            "https://a.com/form", {"name": {"agent": "x", "user": "A"}}
-        )
-        _save_corrections(
-            "https://b.com/form", {"name": {"agent": "y", "user": "B"}}
-        )
+        _save_corrections("https://a.com/form", {"name": {"agent": "x", "user": "A"}})
+        _save_corrections("https://b.com/form", {"name": {"agent": "y", "user": "B"}})
 
         loaded_a = _load_corrections("https://a.com/other")
         assert "A" in loaded_a
@@ -133,12 +149,14 @@ class TestCorrectionsRoundtrip:
 class TestDetectProvider:
     def _clear_keys(self, monkeypatch):
         monkeypatch.delenv("AUTOFILL_PROVIDER", raising=False)
+        monkeypatch.delenv("AUTOFILL_OLLAMA_MODEL", raising=False)
         for info in _PROVIDERS.values():
             if info.get("env"):
                 monkeypatch.delenv(info["env"], raising=False)
-        # Treat nothing as ambient by default so these tests are deterministic
-        # regardless of what the test runner's own shell happens to export.
+        # Treat nothing as ambient, and pretend .env is empty, so these tests are
+        # deterministic regardless of the runner's shell or cwd.
         monkeypatch.setattr(agent_mod, "_AMBIENT_ENV_KEYS", frozenset())
+        monkeypatch.setattr(agent_mod, "_env_file_keys", frozenset)
 
     def test_returns_none_when_no_keys(self, monkeypatch):
         self._clear_keys(monkeypatch)
@@ -168,10 +186,35 @@ class TestDetectProvider:
         monkeypatch.setenv("AUTOFILL_PROVIDER", "ollama")
         assert _detect_provider() == "ollama"
 
+    def test_ollama_inferred_from_model_var(self, monkeypatch):
+        # Setup records AUTOFILL_OLLAMA_MODEL; that alone identifies Ollama, so
+        # no AUTOFILL_PROVIDER pointer is needed to remember the choice.
+        self._clear_keys(monkeypatch)
+        monkeypatch.setenv("AUTOFILL_OLLAMA_MODEL", "qwen2.5:14b")
+        assert _detect_provider() == "ollama"
+
+    def test_cloud_key_outranks_inferred_ollama(self, monkeypatch):
+        # Registry order wins: a real Browser Use key beats a leftover Ollama model.
+        self._clear_keys(monkeypatch)
+        monkeypatch.setenv("AUTOFILL_OLLAMA_MODEL", "qwen2.5:14b")
+        monkeypatch.setenv(_PROVIDERS["browseruse"]["env"], "bu-key")
+        assert _detect_provider() == "browseruse"
+
     def test_ollama_never_auto_detected(self, monkeypatch):
-        # Without AUTOFILL_PROVIDER=ollama, Ollama is not selected.
+        # With no model recorded and no override, Ollama is not selected.
         self._clear_keys(monkeypatch)
         assert _detect_provider() is None
+
+    def test_browseruse_beats_ambient_anthropic(self, monkeypatch):
+        # Jay's shell: both keys exported, no AUTOFILL_PROVIDER. BROWSER_USE_API_KEY
+        # is autofill-exclusive so it's never ambient; ANTHROPIC_API_KEY is shared
+        # and gets skipped. Browser Use must win (JAY-93).
+        self._clear_keys(monkeypatch)
+        bu, ak = _PROVIDERS["browseruse"]["env"], _PROVIDERS["anthropic"]["env"]
+        monkeypatch.setenv(bu, "bu-key")
+        monkeypatch.setenv(ak, "ak-key")
+        monkeypatch.setattr(agent_mod, "_AMBIENT_ENV_KEYS", frozenset({bu, ak}))
+        assert _detect_provider() == "browseruse"
 
     def test_ambient_key_not_auto_adopted(self, monkeypatch):
         # A key exported in the shell (ambient) must not be auto-selected (JAY-93).
@@ -214,10 +257,15 @@ class TestKeyFingerprint:
 
 
 class TestIsAmbientKey:
-    """`_is_ambient_key` distinguishes a shell-exported key from a .env one."""
+    """A key is ambient only if it's *shared*, from the shell, and not in .env."""
 
-    def test_true_when_env_name_in_snapshot(self, monkeypatch):
-        # ANTHROPIC_API_KEY was in the shell before .env loaded — ambient.
+    def _no_env_file(self, monkeypatch):
+        monkeypatch.setattr(agent_mod, "_env_file_keys", frozenset)
+
+    def test_true_when_shared_key_in_snapshot(self, monkeypatch):
+        # ANTHROPIC_API_KEY was in the shell before .env loaded, and Claude reads
+        # that var too — so it says nothing about autofill.
+        self._no_env_file(monkeypatch)
         monkeypatch.setattr(
             agent_mod, "_AMBIENT_ENV_KEYS", frozenset({"ANTHROPIC_API_KEY"})
         )
@@ -225,17 +273,87 @@ class TestIsAmbientKey:
 
     def test_false_when_env_name_absent(self, monkeypatch):
         # browseruse key isn't in the snapshot — autofill wrote it to .env.
+        self._no_env_file(monkeypatch)
         monkeypatch.setattr(
             agent_mod, "_AMBIENT_ENV_KEYS", frozenset({"ANTHROPIC_API_KEY"})
         )
         assert _is_ambient_key("browseruse") is False
 
+    def test_false_for_exclusive_key_even_when_in_shell(self, monkeypatch):
+        # Nothing but autofill reads BROWSER_USE_API_KEY, so a shell export is
+        # still a statement about autofill. It must not be dismissed as ambient.
+        self._no_env_file(monkeypatch)
+        monkeypatch.setattr(
+            agent_mod, "_AMBIENT_ENV_KEYS", frozenset({"BROWSER_USE_API_KEY"})
+        )
+        assert _is_ambient_key("browseruse") is False
+
+    def test_false_when_shared_key_also_in_env_file(self, monkeypatch):
+        # Written into autofill's own .env, it's explicit config — not ambient,
+        # even though the shell exports the same name.
+        monkeypatch.setattr(
+            agent_mod, "_AMBIENT_ENV_KEYS", frozenset({"ANTHROPIC_API_KEY"})
+        )
+        monkeypatch.setattr(
+            agent_mod, "_env_file_keys", lambda: frozenset({"ANTHROPIC_API_KEY"})
+        )
+        assert _is_ambient_key("anthropic") is False
+
     def test_false_for_keyless_provider(self, monkeypatch):
         # Ollama has no API-key var, so it can never be ambient.
+        self._no_env_file(monkeypatch)
         monkeypatch.setattr(
             agent_mod, "_AMBIENT_ENV_KEYS", frozenset({"AUTOFILL_PROVIDER"})
         )
         assert _is_ambient_key("ollama") is False
+
+
+class TestPersistProviderChoice:
+    """AUTOFILL_PROVIDER is written only when inference can't reach the choice.
+
+    A stale pointer outranks every key and silently hijacks later runs, so the
+    common paths must not create one at all (JAY-93).
+    """
+
+    def _setup(self, monkeypatch, tmp_path):
+        # cfg is frozen and cfg.env_file is relative, so chdir is how we redirect it.
+        monkeypatch.chdir(tmp_path)
+        monkeypatch.delenv("AUTOFILL_PROVIDER", raising=False)
+        monkeypatch.delenv("AUTOFILL_OLLAMA_MODEL", raising=False)
+        for info in _PROVIDERS.values():
+            if info.get("env"):
+                monkeypatch.delenv(info["env"], raising=False)
+        monkeypatch.setattr(agent_mod, "_AMBIENT_ENV_KEYS", frozenset())
+        return tmp_path / ".env"
+
+    def test_writes_nothing_when_inference_agrees(self, monkeypatch, tmp_path):
+        # The whole point: picking Browser Use with a Browser Use key present
+        # leaves no pointer behind, so there's nothing to go stale.
+        env_file = self._setup(monkeypatch, tmp_path)
+        monkeypatch.setenv(_PROVIDERS["browseruse"]["env"], "bu-key")
+        agent_mod._persist_provider_choice("browseruse")
+        assert not env_file.exists()
+        assert "AUTOFILL_PROVIDER" not in os.environ
+
+    def test_writes_pointer_to_break_a_real_tie(self, monkeypatch, tmp_path):
+        # Ollama chosen while a Browser Use key is present: inference would say
+        # browseruse, so the choice genuinely has to be recorded.
+        env_file = self._setup(monkeypatch, tmp_path)
+        monkeypatch.setenv(_PROVIDERS["browseruse"]["env"], "bu-key")
+        monkeypatch.setenv("AUTOFILL_OLLAMA_MODEL", "qwen2.5:14b")
+        agent_mod._persist_provider_choice("ollama")
+        assert "AUTOFILL_PROVIDER=ollama" in env_file.read_text()
+        assert os.environ["AUTOFILL_PROVIDER"] == "ollama"
+
+    def test_writes_pointer_for_deliberate_ambient_key(self, monkeypatch, tmp_path):
+        # Anthropic picked on purpose while its key is only in the shell:
+        # inference skips ambient keys, so record the choice.
+        env_file = self._setup(monkeypatch, tmp_path)
+        ak = _PROVIDERS["anthropic"]["env"]
+        monkeypatch.setenv(ak, "ak-key")
+        monkeypatch.setattr(agent_mod, "_AMBIENT_ENV_KEYS", frozenset({ak}))
+        agent_mod._persist_provider_choice("anthropic")
+        assert "AUTOFILL_PROVIDER=anthropic" in env_file.read_text()
 
 
 class TestModelOverride:
@@ -347,10 +465,22 @@ class TestCookiejarToStorageState:
         from http.cookiejar import Cookie
 
         defaults = dict(
-            version=0, name="sid", value="abc", port=None, port_specified=False,
-            domain=".workday.com", domain_specified=True, domain_initial_dot=True,
-            path="/", path_specified=True, secure=True, expires=1893456000,
-            discard=False, comment=None, comment_url=None, rest={},
+            version=0,
+            name="sid",
+            value="abc",
+            port=None,
+            port_specified=False,
+            domain=".workday.com",
+            domain_specified=True,
+            domain_initial_dot=True,
+            path="/",
+            path_specified=True,
+            secure=True,
+            expires=1893456000,
+            discard=False,
+            comment=None,
+            comment_url=None,
+            rest={},
         )
         defaults.update(kw)
         # ty can't check **dict unpack against Cookie's typed signature; the
