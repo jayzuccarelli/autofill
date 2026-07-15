@@ -1,5 +1,7 @@
 """AI-powered form autofill: ingest local knowledge, retrieve context, fill form."""
 
+from __future__ import annotations
+
 import asyncio
 import hashlib
 import json
@@ -11,11 +13,9 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import Any
+from typing import TYPE_CHECKING, Any
 from urllib.parse import urlparse
 
-import browser_use as bu
-import chromadb
 import questionary
 from dotenv import dotenv_values, load_dotenv
 from rich.console import Console
@@ -34,6 +34,13 @@ from rich.theme import Theme
 
 from autofill.telemetry import init_sentry as _init_sentry
 from autofill.telemetry import track as _capture
+
+# browser_use and chromadb cost ~2.3s to import between them — most of the wait
+# before the first prompt. Neither is needed to onboard, print help, or pick a
+# provider, so they're imported at the point of use instead of on every startup.
+if TYPE_CHECKING:
+    import browser_use as bu
+    import chromadb
 
 # Env-var NAMES present at import — the user's shell environment, captured
 # before cli() calls load_dotenv(). Lets onboarding tell an ambient key (e.g.
@@ -416,6 +423,7 @@ def _is_ambient_key(provider: str) -> bool:
 
 def _client() -> chromadb.ClientAPI:
     """Return a persistent Chroma client, creating the DB directory if needed."""
+    import chromadb
     cfg.db_path.mkdir(parents=True, exist_ok=True)
     return chromadb.PersistentClient(path=str(cfg.db_path))
 
@@ -606,7 +614,8 @@ def _llm(provider: str) -> Any:
         model = os.environ.get("AUTOFILL_OPENAI_MODEL") or cfg.openai_model
         return ChatOpenAI(model=model)
     if provider == "browseruse":
-        return bu.ChatBrowserUse()
+        from browser_use import ChatBrowserUse
+        return ChatBrowserUse()
     if provider == "ollama":
         from browser_use.llm.ollama.chat import ChatOllama
         model = os.environ.get("AUTOFILL_OLLAMA_MODEL") or cfg.ollama_model
@@ -956,7 +965,8 @@ Rules:
     seed_state = str(cfg.seed_state_file) if cfg.seed_state_file.exists() else None
     if seed_state:
         _capture("chrome_cookies_seeding")
-    browser_profile = bu.BrowserProfile(
+    from browser_use import Agent, BrowserProfile
+    browser_profile = BrowserProfile(
         keep_alive=True,
         headless=False,
         user_data_dir=str(cfg.browser_profile_dir),
@@ -977,7 +987,7 @@ Rules:
             f" · {elapsed}s elapsed[/]"
         )
 
-    def _build_agent(session=None) -> bu.Agent:
+    def _build_agent(session=None) -> Agent:
         """Construct the agent; reuse *session* (keeps the window) on resume."""
         kwargs: dict = dict(
             task=task,
@@ -1001,7 +1011,7 @@ Rules:
             kwargs["browser_session"] = session
         else:
             kwargs["browser_profile"] = browser_profile
-        agent = bu.Agent(**kwargs)
+        agent = Agent(**kwargs)
         _force_input_clear(agent)
         return agent
 
