@@ -53,32 +53,13 @@ class TestChunkText:
 class TestSensitiveFieldRegex:
     @pytest.mark.parametrize(
         "field",
-        [
-            "password",
-            "Password",
-            "PASSWORD",
-            "passcode",
-            "otp",
-            "pin",
-            "ssn",
-            "cvv",
-            "cvc",
-            "secret",
-            "passport",
-            "dob",
-            "card_number",
-            "cardnumber",
-            "card-number",
-            # Underscore-separated forms — these were silently slipping
-            # through under the old \b regex because _ is a word char.
-            "password_field",
-            "auth_token",
-            "account_number",
-            "bank_routing",
-            "social_security",
-            "passport_no",
-            "date_of_birth",
-        ],
+        ["password", "Password", "PASSWORD", "passcode", "otp", "pin",
+         "ssn", "cvv", "cvc", "secret", "passport", "dob",
+         "card_number", "cardnumber", "card-number",
+         # Underscore-separated forms — these were silently slipping
+         # through under the old \b regex because _ is a word char.
+         "password_field", "auth_token", "account_number", "bank_routing",
+         "social_security", "passport_no", "date_of_birth"],
     )
     def test_matches_sensitive(self, field):
         assert _SENSITIVE_FIELD_RE.search(field), f"expected match: {field!r}"
@@ -131,8 +112,12 @@ class TestCorrectionsRoundtrip:
             object.__setattr__(cfg, "corrections_file", type(cfg).corrections_file)
 
     def test_load_filters_by_domain(self, tmp_corrections):
-        _save_corrections("https://a.com/form", {"name": {"agent": "x", "user": "A"}})
-        _save_corrections("https://b.com/form", {"name": {"agent": "y", "user": "B"}})
+        _save_corrections(
+            "https://a.com/form", {"name": {"agent": "x", "user": "A"}}
+        )
+        _save_corrections(
+            "https://b.com/form", {"name": {"agent": "y", "user": "B"}}
+        )
 
         loaded_a = _load_corrections("https://a.com/other")
         assert "A" in loaded_a
@@ -465,22 +450,10 @@ class TestCookiejarToStorageState:
         from http.cookiejar import Cookie
 
         defaults = dict(
-            version=0,
-            name="sid",
-            value="abc",
-            port=None,
-            port_specified=False,
-            domain=".workday.com",
-            domain_specified=True,
-            domain_initial_dot=True,
-            path="/",
-            path_specified=True,
-            secure=True,
-            expires=1893456000,
-            discard=False,
-            comment=None,
-            comment_url=None,
-            rest={},
+            version=0, name="sid", value="abc", port=None, port_specified=False,
+            domain=".workday.com", domain_specified=True, domain_initial_dot=True,
+            path="/", path_specified=True, secure=True, expires=1893456000,
+            discard=False, comment=None, comment_url=None, rest={},
         )
         defaults.update(kw)
         # ty can't check **dict unpack against Cookie's typed signature; the

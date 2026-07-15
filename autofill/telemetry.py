@@ -38,9 +38,10 @@ _client_lock = threading.Lock()
 
 
 def _enabled() -> bool:
-    return os.environ.get(
-        "AUTOFILL_TELEMETRY", "1"
-    ).strip() != "0" and not _POSTHOG_KEY.startswith("REPLACE_")
+    return (
+        os.environ.get("AUTOFILL_TELEMETRY", "1").strip() != "0"
+        and not _POSTHOG_KEY.startswith("REPLACE_")
+    )
 
 
 def _install_id() -> str:
@@ -116,9 +117,10 @@ _SENTRY_DSN = "https://30e81fbd4680630b19d8561d7aeaa818@o4511413765865472.ingest
 
 
 def _sentry_enabled() -> bool:
-    return os.environ.get(
-        "AUTOFILL_SENTRY", "0"
-    ).strip() == "1" and not _SENTRY_DSN.startswith("REPLACE_")
+    return (
+        os.environ.get("AUTOFILL_SENTRY", "0").strip() == "1"
+        and not _SENTRY_DSN.startswith("REPLACE_")
+    )
 
 
 def init_sentry() -> None:
