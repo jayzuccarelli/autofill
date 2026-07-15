@@ -320,13 +320,13 @@ def _play_intro(*info_lines: str) -> None:
 def _detect_provider() -> str | None:
     """Return the active provider, based on env vars.
 
-    The provider is *inferred* from which key is present, in _PROVIDERS order:
-    Browser Use, Anthropic, OpenAI, Ollama. An ambient key (a shared var like
+    Cloud providers are *inferred* from which key is present, in _PROVIDERS
+    order: Browser Use, Anthropic, OpenAI. An ambient key (a shared var like
     ANTHROPIC_API_KEY exported in the shell for another tool) is skipped — the
-    user must pick it explicitly. Ollama is inferred from AUTOFILL_OLLAMA_MODEL,
-    which setup writes.
+    user must pick it explicitly. Ollama takes no key, so it is never inferred;
+    only an explicit ``AUTOFILL_PROVIDER=ollama`` selects it.
 
-    ``AUTOFILL_PROVIDER`` overrides all of it, but setup only writes it when
+    ``AUTOFILL_PROVIDER`` overrides all of it, but setup writes it only when
     inference can't reach the user's choice — a stale one silently hijacks every
     later run (JAY-93).
     """
@@ -339,8 +339,6 @@ def _detect_provider() -> str | None:
         env = info.get("env")
         if env and os.environ.get(env) and not _is_ambient_key(name):
             return name
-    if os.environ.get("AUTOFILL_OLLAMA_MODEL"):
-        return "ollama"
     return None
 
 
@@ -365,10 +363,16 @@ def _key_fingerprint(provider: str) -> str:
 
 
 def _env_file_keys() -> frozenset[str]:
-    """Names set in autofill's own .env, which are explicit config by definition."""
+    """Names with a non-empty value in autofill's own .env — explicit config.
+
+    Blank lines like ``ANTHROPIC_API_KEY=`` are how people disable a key while
+    keeping it around, so they must not count as configuring it: dotenv_values
+    still reports the name, and treating that as explicit would hand the ambient
+    guard back the very key the user just switched off.
+    """
     if not cfg.env_file.exists():
         return frozenset()
-    return frozenset(dotenv_values(cfg.env_file))
+    return frozenset(k for k, v in dotenv_values(cfg.env_file).items() if v)
 
 
 def _is_ambient_key(provider: str) -> bool:
@@ -1325,12 +1329,17 @@ def _onboard_ollama() -> None:
         f"Model name (Enter for default '{cfg.ollama_model}')",
         default=cfg.ollama_model,
     )
-    # Always record the model: it's what identifies Ollama to _detect_provider().
+    # Ollama takes no API key, so nothing about the environment can imply it —
+    # the pointer is the only record of the choice and is always written. It also
+    # has to outrank any cloud key that shows up later: picking Ollama means
+    # keeping the data local, and a BROWSER_USE_API_KEY appearing next week is no
+    # reason to start shipping profile PII to a cloud model.
     with open(cfg.env_file, "a") as f:
+        f.write("AUTOFILL_PROVIDER=ollama\n")
         f.write(f"AUTOFILL_OLLAMA_MODEL={model}\n")
     cfg.env_file.chmod(0o600)
+    os.environ["AUTOFILL_PROVIDER"] = "ollama"
     os.environ["AUTOFILL_OLLAMA_MODEL"] = model
-    _persist_provider_choice("ollama")
     _capture("api_key_configured", {"provider": "ollama"})
 
     if _probe_ollama():
@@ -1349,6 +1358,18 @@ def _onboard_api_key() -> None:
     """Prompt for a provider (and API key, unless local); confirm any detected one."""
     console.print()
     console.print(Rule("Provider", style="accent"))
+
+    # A shell-exported AUTOFILL_PROVIDER outranks every key, and .env can't undo
+    # it — load_dotenv() keeps the shell's value — so nothing chosen below would
+    # stick. Say so rather than silently ignoring the answer (JAY-93).
+    if "AUTOFILL_PROVIDER" in _AMBIENT_ENV_KEYS:
+        stale = os.environ.get("AUTOFILL_PROVIDER", "")
+        console.print(
+            f"\n  [err]Your shell exports AUTOFILL_PROVIDER={stale}[/], which"
+            " overrides whatever you pick here. Run [bold]unset"
+            " AUTOFILL_PROVIDER[/] and drop it from your shell profile,"
+            " otherwise this choice won't take effect.\n"
+        )
 
     detected = _detect_provider()
     # Confirm a detected provider rather than adopting it silently. Ambient keys

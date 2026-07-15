@@ -171,22 +171,23 @@ class TestDetectProvider:
         monkeypatch.setenv("AUTOFILL_PROVIDER", "ollama")
         assert _detect_provider() == "ollama"
 
-    def test_ollama_inferred_from_model_var(self, monkeypatch):
-        # Setup records AUTOFILL_OLLAMA_MODEL; that alone identifies Ollama, so
-        # no AUTOFILL_PROVIDER pointer is needed to remember the choice.
+    def test_ollama_never_inferred_from_model_var(self, monkeypatch):
+        # A model name is not a provider choice: AUTOFILL_OLLAMA_MODEL alone must
+        # not select Ollama, only an explicit AUTOFILL_PROVIDER=ollama does.
         self._clear_keys(monkeypatch)
         monkeypatch.setenv("AUTOFILL_OLLAMA_MODEL", "qwen2.5:14b")
+        assert _detect_provider() is None
+
+    def test_explicit_ollama_outranks_a_later_cloud_key(self, monkeypatch):
+        # Picking Ollama means keeping data local. A Browser Use key showing up
+        # afterwards must not silently reroute profile PII to a cloud model.
+        self._clear_keys(monkeypatch)
+        monkeypatch.setenv("AUTOFILL_PROVIDER", "ollama")
+        monkeypatch.setenv(_PROVIDERS["browseruse"]["env"], "bu-key")
         assert _detect_provider() == "ollama"
 
-    def test_cloud_key_outranks_inferred_ollama(self, monkeypatch):
-        # Registry order wins: a real Browser Use key beats a leftover Ollama model.
-        self._clear_keys(monkeypatch)
-        monkeypatch.setenv("AUTOFILL_OLLAMA_MODEL", "qwen2.5:14b")
-        monkeypatch.setenv(_PROVIDERS["browseruse"]["env"], "bu-key")
-        assert _detect_provider() == "browseruse"
-
     def test_ollama_never_auto_detected(self, monkeypatch):
-        # With no model recorded and no override, Ollama is not selected.
+        # With no override, Ollama is not selected.
         self._clear_keys(monkeypatch)
         assert _detect_provider() is None
 
@@ -284,6 +285,24 @@ class TestIsAmbientKey:
         )
         assert _is_ambient_key("anthropic") is False
 
+    def test_blank_env_file_line_does_not_count_as_configured(
+        self, monkeypatch, tmp_path
+    ):
+        # `ANTHROPIC_API_KEY=` is how you switch a key off while keeping the line.
+        # dotenv_values still reports the name, so a naive membership test would
+        # treat it as explicit config and hand the ambient guard back the very key
+        # the user just disabled (JAY-93).
+        monkeypatch.chdir(tmp_path)
+        (tmp_path / ".env").write_text("ANTHROPIC_API_KEY=\nOPENAI_API_KEY=oa-key\n")
+        monkeypatch.setattr(
+            agent_mod,
+            "_AMBIENT_ENV_KEYS",
+            frozenset({"ANTHROPIC_API_KEY", "OPENAI_API_KEY"}),
+        )
+        assert agent_mod._env_file_keys() == frozenset({"OPENAI_API_KEY"})
+        assert _is_ambient_key("anthropic") is True
+        assert _is_ambient_key("openai") is False
+
     def test_false_for_keyless_provider(self, monkeypatch):
         # Ollama has no API-key var, so it can never be ambient.
         self._no_env_file(monkeypatch)
@@ -321,14 +340,14 @@ class TestPersistProviderChoice:
         assert "AUTOFILL_PROVIDER" not in os.environ
 
     def test_writes_pointer_to_break_a_real_tie(self, monkeypatch, tmp_path):
-        # Ollama chosen while a Browser Use key is present: inference would say
-        # browseruse, so the choice genuinely has to be recorded.
+        # OpenAI chosen while a Browser Use key is also present: inference walks
+        # registry order and would say browseruse, so the pick must be recorded.
         env_file = self._setup(monkeypatch, tmp_path)
         monkeypatch.setenv(_PROVIDERS["browseruse"]["env"], "bu-key")
-        monkeypatch.setenv("AUTOFILL_OLLAMA_MODEL", "qwen2.5:14b")
-        agent_mod._persist_provider_choice("ollama")
-        assert "AUTOFILL_PROVIDER=ollama" in env_file.read_text()
-        assert os.environ["AUTOFILL_PROVIDER"] == "ollama"
+        monkeypatch.setenv(_PROVIDERS["openai"]["env"], "oa-key")
+        agent_mod._persist_provider_choice("openai")
+        assert "AUTOFILL_PROVIDER=openai" in env_file.read_text()
+        assert os.environ["AUTOFILL_PROVIDER"] == "openai"
 
     def test_writes_pointer_for_deliberate_ambient_key(self, monkeypatch, tmp_path):
         # Anthropic picked on purpose while its key is only in the shell:
