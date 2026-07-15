@@ -347,6 +347,20 @@ def _has_any_api_key() -> bool:
     return _detect_provider() is not None
 
 
+def _provider_ready(provider: str) -> bool:
+    """True if `provider` could run right now: its key is present, or it needs none.
+
+    Deliberately ignores the ambient check. That guard exists because a shell key
+    alone doesn't say which provider the user wants — but naming the provider
+    outright (``--provider anthropic``) is exactly the explicit choice it asks
+    for, so the key should be honoured rather than the flag ignored.
+    """
+    if provider not in _PROVIDERS:
+        return False
+    env = _PROVIDERS[provider].get("env")
+    return env is None or bool(os.environ.get(env))
+
+
 def _key_fingerprint(provider: str) -> str:
     """Return a short masked tail like ``(…a4f2)`` so the active key is visible.
 
@@ -1632,7 +1646,14 @@ def _run_cli() -> None:
         _onboard(edit=True)
         return
 
-    needs_setup = not _has_profile_content() or not _has_any_api_key()
+    # `--provider X` names the provider outright, so it settles the question the
+    # ambient guard exists to ask. Gating on _has_any_api_key() alone would send
+    # `--provider anthropic` to "Not set up yet" when the only ANTHROPIC_API_KEY
+    # is a shell export, ignoring the very flag the user reached for.
+    configured = (
+        _provider_ready(args.provider) if args.provider else _has_any_api_key()
+    )
+    needs_setup = not _has_profile_content() or not configured
 
     if not args.command:
         if needs_setup:

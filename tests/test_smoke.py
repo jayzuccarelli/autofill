@@ -312,6 +312,41 @@ class TestIsAmbientKey:
         assert _is_ambient_key("ollama") is False
 
 
+class TestProviderReady:
+    """`--provider X` is an explicit choice, so an ambient key must not block it."""
+
+    def _clear(self, monkeypatch):
+        for info in _PROVIDERS.values():
+            if info.get("env"):
+                monkeypatch.delenv(info["env"], raising=False)
+
+    def test_true_for_ambient_key_when_named_explicitly(self, monkeypatch):
+        # `autofill --provider anthropic <url>` with ANTHROPIC_API_KEY only in the
+        # shell must run, not report "Not set up yet". Naming the provider settles
+        # the question the ambient guard exists to ask.
+        self._clear(monkeypatch)
+        ak = _PROVIDERS["anthropic"]["env"]
+        monkeypatch.setenv(ak, "ak-key")
+        monkeypatch.setattr(agent_mod, "_AMBIENT_ENV_KEYS", frozenset({ak}))
+        monkeypatch.setattr(agent_mod, "_env_file_keys", frozenset)
+        assert _is_ambient_key("anthropic") is True  # guard still says ambient...
+        assert _detect_provider() is None  # ...so inference declines to guess...
+        assert agent_mod._provider_ready("anthropic") is True  # ...but the flag wins
+
+    def test_false_when_key_missing(self, monkeypatch):
+        self._clear(monkeypatch)
+        assert agent_mod._provider_ready("openai") is False
+
+    def test_true_for_keyless_provider(self, monkeypatch):
+        self._clear(monkeypatch)
+        assert agent_mod._provider_ready("ollama") is True
+
+    def test_false_for_unknown_provider(self, monkeypatch):
+        # Must not read as "no key needed, good to go".
+        self._clear(monkeypatch)
+        assert agent_mod._provider_ready("gemini") is False
+
+
 class TestPersistProviderChoice:
     """AUTOFILL_PROVIDER is written only when inference can't reach the choice.
 
