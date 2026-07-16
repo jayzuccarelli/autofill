@@ -896,6 +896,18 @@ def _import_chrome_cookies() -> dict | None:
     return state if state["cookies"] else None
 
 
+def _llm_failure_reason(history: Any) -> str | None:
+    """The LLM error to report when a run produced no model output, else None.
+
+    No model output means the agent never acted: the LLM failed on every step
+    (e.g. the provider rejects the key). Returns the first step error, or ""
+    when the run failed with no error text to show.
+    """
+    if history.model_outputs():
+        return None
+    return next((e for e in history.errors() if e), "")
+
+
 async def main(url: str, provider: str, log_path: Path | None = None) -> None:
     """Build the task prompt and run the browser agent (ingest already ran in cli)."""
     profile = retrieve(cfg.retrieval_query)
@@ -1064,6 +1076,24 @@ Rules:
         break
     agent_run_elapsed = int(time.monotonic() - run_start)
     try:
+        # Report an LLM that never produced a step before capturing anything:
+        # the page is untouched, so capture would print "Tracking 0 field(s)"
+        # and read as an empty form rather than a failed run. Returning from
+        # inside the try still runs the finally below.
+        llm_failure = None if timed_out else _llm_failure_reason(agent.history)
+        if llm_failure is not None:
+            console.print(
+                f"\n[err]The {provider} model never returned a usable step[/] —"
+                " nothing was filled."
+            )
+            if llm_failure:
+                console.print(f"  [dim]{llm_failure.strip().splitlines()[-1][:300]}[/]")
+            if log_path is not None:
+                console.print(f"  Full log: [dim]{log_path}[/]")
+            console.print()
+            _capture("agent_no_model_output", {"provider": provider})
+            return
+
         # Snapshot what the agent filled, then poll for user edits until submit.
         console.print(
             "\n[info]Capturing form state — please review and submit in the"
