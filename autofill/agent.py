@@ -646,17 +646,23 @@ const SEL = 'input,textarea,select,[role="textbox"],[role="combobox"],' +
   '[role="listbox"],[role="spinbutton"],[role="searchbox"],[role="radio"],' +
   '[role="checkbox"],[role="switch"],[contenteditable="true"]';
 const labelFor = (el) => {
+  // Resolve referenced labels within the field's own root (shadow root or
+  // iframe document), not the top document — otherwise linked labels inside a
+  // shadow/iframe come back empty and skip label-based sensitive filtering.
+  const root = el.getRootNode();
   const al = el.getAttribute('aria-label'); if (al) return al.trim();
   const lb = el.getAttribute('aria-labelledby');
   if (lb) {
     const t = lb.split(/\s+/).map(function(id){
-      const n = document.getElementById(id); return n ? n.textContent : '';
+      const n = root.getElementById ? root.getElementById(id)
+        : document.getElementById(id);
+      return n ? n.textContent : '';
     }).join(' ').trim();
     if (t) return t;
   }
   if (el.id) {
     try {
-      const l = document.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+      const l = root.querySelector('label[for="' + CSS.escape(el.id) + '"]');
       if (l) return l.textContent.trim();
     } catch (e) {}
   }
@@ -691,7 +697,12 @@ const valueOf = (el) => {
   if (role === 'radio' || role === 'checkbox' || role === 'switch') {
     return el.getAttribute('aria-checked') || 'false';
   }
-  if (el.tagName === 'SELECT') return el.value || '';
+  if (el.tagName === 'SELECT') {
+    // The visible option text is the human-readable answer; el.value is often an
+    // opaque code (<option value="US">United States</option>).
+    const o = el.selectedOptions ? el.selectedOptions[0] : null;
+    return o ? (o.text || o.value || '').trim() : (el.value || '');
+  }
   if (el.isContentEditable) return (el.textContent || '').trim();
   if (role === 'combobox' || role === 'listbox') {
     if (el.value) return el.value;
@@ -730,7 +741,7 @@ return JSON.stringify(out);
 })()"""
 
 
-async def _snapshot_fields(session) -> dict:
+async def _snapshot_fields(session) -> dict | None:
     """Return ``{key: {"label", "value"}}`` for every field in the DOM.
 
     One CDP ``Runtime.evaluate`` runs :data:`_COLLECT_JS`, which walks the whole
@@ -738,6 +749,10 @@ async def _snapshot_fields(session) -> dict:
     and shadow-DOM fields are captured too. Fields are keyed by stable identity
     (autocomplete/name/id), not a positional label, so a saved correction still
     lines up after the form re-renders. Sensitive fields are dropped.
+
+    Returns ``None`` (not ``{}``) if the read fails, so callers can tell a failed
+    snapshot from a genuinely empty page — diffing against a failed baseline would
+    log every populated field as a bogus correction.
     """
     try:
         cdp_session = await session.get_or_create_cdp_session(focus=False)
@@ -748,7 +763,7 @@ async def _snapshot_fields(session) -> dict:
         raw = (result.get("result") or {}).get("value") or "[]"
         fields = json.loads(raw)
     except Exception:
-        return {}
+        return None
 
     out: dict[str, dict] = {}
     for f in fields:
@@ -794,7 +809,7 @@ async def _watch_fields(session, agent_snapshot: dict, url: str) -> dict:
     than tracking edit events — is what catches custom dropdowns (Airtable,
     react-select) that fire no ``change``/``focusout``. The re-read and save run in
     a ``finally`` so Ctrl-C or a normal Enter both flush; a dead browser snapshots
-    to ``{}`` and simply yields no corrections. Returns the corrections dict.
+    to ``None`` and simply yields no corrections. Returns the corrections dict.
     """
     corrections: dict = {}
     try:
@@ -805,9 +820,10 @@ async def _watch_fields(session, agent_snapshot: dict, url: str) -> dict:
         )
     finally:
         user_snapshot = await _snapshot_fields(session)
-        corrections = _diff_corrections(agent_snapshot, user_snapshot)
-        if corrections:
-            _save_corrections(url, corrections)
+        if user_snapshot is not None:
+            corrections = _diff_corrections(agent_snapshot, user_snapshot)
+            if corrections:
+                _save_corrections(url, corrections)
     return corrections
 
 
@@ -851,9 +867,10 @@ def _load_corrections(url: str) -> str:
 # which would otherwise let `password_field` and `auth_token` slip through.
 _SENSITIVE_FIELD_RE = re.compile(
     r"(?<![A-Za-z0-9])"
-    r"(password|passcode|otp|pin|2fa|ssn|social.?sec(?:urity)?|cvv|cvc"
-    r"|card.?num(?:ber)?|expir|exp_|secret|token|auth|passport|birth|dob"
-    r"|bank|routing|account.?num(?:ber)?)"
+    r"(password|passcode|otp|one.?time.?code|pin|2fa|ssn|social.?sec(?:urity)?"
+    r"|cvv|cvc|csc|card.?num(?:ber)?|cc.?num(?:ber)?|cc.?exp|expir|exp_"
+    r"|secret|token|auth|passport|birth|dob|bday|bank|routing"
+    r"|account.?num(?:ber)?)"
     r"(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
@@ -1128,14 +1145,21 @@ Rules:
         console.print(
             "\n[info]Capturing form state — review and edit in the browser.[/]"
         )
-        agent_snapshot: dict = {}
+        agent_snapshot: dict | None = None
         if agent.browser_session is not None:
             try:
                 agent_snapshot = await _snapshot_fields(agent.browser_session)
-                console.print(f"[dim]Tracking {len(agent_snapshot)} field(s)…[/]")
             except Exception as exc:
                 console.print(f"[err]Warning:[/] Could not snapshot fields: {exc}")
+            if agent_snapshot is None:
+                console.print(
+                    "[err]Warning:[/] Couldn't read the form — skipping correction "
+                    "tracking this run."
+                )
+            else:
+                console.print(f"[dim]Tracking {len(agent_snapshot)} field(s)…[/]")
 
+        field_count = len(agent_snapshot or {})
         if not timed_out:
             _capture(
                 "form_fill_completed",
@@ -1144,12 +1168,14 @@ Rules:
                     "has_attachments": bool(attachments),
                     "last_step": last_step,
                     "elapsed_seconds": agent_run_elapsed,
-                    "field_count_bucket": _field_count_bucket(len(agent_snapshot)),
+                    "field_count_bucket": _field_count_bucket(field_count),
                 },
             )
 
         corrections: dict = {}
-        if agent.browser_session is not None:
+        # Skip tracking when the baseline read failed — diffing against a failed
+        # snapshot would log every populated field as a bogus correction.
+        if agent.browser_session is not None and agent_snapshot is not None:
             try:
                 corrections = await _watch_fields(
                     agent.browser_session, agent_snapshot, url

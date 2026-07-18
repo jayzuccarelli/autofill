@@ -60,7 +60,9 @@ class TestSensitiveFieldRegex:
          # Underscore-separated forms — these were silently slipping
          # through under the old \b regex because _ is a word char.
          "password_field", "auth_token", "account_number", "bank_routing",
-         "social_security", "passport_no", "date_of_birth"],
+         "social_security", "passport_no", "date_of_birth",
+         # Standard autocomplete tokens that keyFor can surface as the key.
+         "cc-number", "cc-csc", "cc-exp", "csc", "one-time-code", "bday"],
     )
     def test_matches_sensitive(self, field):
         assert _SENSITIVE_FIELD_RE.search(field), f"expected match: {field!r}"
