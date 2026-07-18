@@ -638,9 +638,9 @@ def _llm(provider: str) -> Any:
 #              wrapping <label> → placeholder
 #   keyFor   — stable identity: autocomplete token → name → id → label. Survives
 #              re-renders that reorder fields (unlike a positional label suffix).
-#   valueOf  — current value: .checked / aria-checked for toggles, selected
-#              option text for custom dropdowns, textContent for contenteditable,
-#              else .value
+#   valueOf  — current value: .checked for checkboxes, the selected option for
+#              native radio groups (which collapse to one key) and custom
+#              dropdowns, textContent for contenteditable, else .value
 _FIELD_JS_HELPERS = r"""
 const SEL = 'input,textarea,select,[role="textbox"],[role="combobox"],' +
   '[role="listbox"],[role="spinbutton"],[role="searchbox"],[role="radio"],' +
@@ -671,8 +671,22 @@ const keyFor = (el, label) => {
 };
 const valueOf = (el) => {
   const role = (el.getAttribute('role') || '').toLowerCase();
-  if (el.matches && el.matches('input[type="checkbox"],input[type="radio"]')) {
+  if (el.matches && el.matches('input[type="checkbox"]')) {
     return el.checked ? 'true' : 'false';
+  }
+  if (el.matches && el.matches('input[type="radio"]')) {
+    // A native radio group shares one name, so keyFor collapses it to a single
+    // key. Report which option is selected (its value/label), not this element's
+    // checked bit — a bare true/false can't tell the agent which option to pick.
+    let sel = el.checked ? el : null;
+    if (el.name) {
+      const scope = el.form || el.getRootNode();
+      try {
+        sel = scope.querySelector('input[type="radio"][name="' +
+          CSS.escape(el.name) + '"]:checked') || sel;
+      } catch (e) {}
+    }
+    return sel ? (sel.value || labelFor(sel) || 'on') : '';
   }
   if (role === 'radio' || role === 'checkbox' || role === 'switch') {
     return el.getAttribute('aria-checked') || 'false';
