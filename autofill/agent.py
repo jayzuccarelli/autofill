@@ -547,7 +547,7 @@ def _llm(provider: str) -> Any:
 # shared JS helpers below so the baseline and the live tracker key a field the
 # same way.
 
-# Shared JS helpers (embedded in both _COLLECT_JS and _LISTENER_JS):
+# JS helpers embedded in _COLLECT_JS:
 #   SEL      — form controls + ARIA widgets + contenteditable we track
 #   labelFor — human label: aria-label → aria-labelledby → <label for> →
 #              wrapping <label> → placeholder
@@ -630,29 +630,6 @@ walk(document);
 return JSON.stringify(out);
 })()"""
 
-# Installed once via Page.addScriptToEvaluateOnNewDocument (re-runs on every
-# navigation, so multi-page forms keep reporting) plus a one-off inject into the
-# current document. Pushes each completed edit through the __autofill_report
-# binding. `change` covers selects/checkboxes; `focusout` catches typed text in
-# inputs that never fire `change`. Passwords are never reported.
-_LISTENER_JS = "(() => {" + _FIELD_JS_HELPERS + r"""
-if (window.__autofillListenerInstalled) return;
-window.__autofillListenerInstalled = true;
-const report = (el) => {
-  if (!el || !el.matches || !el.matches(SEL)) return;
-  if (el.disabled || el.type === 'hidden' || el.type === 'password') return;
-  const label = labelFor(el);
-  try {
-    window.__autofill_report(JSON.stringify(
-      { key: keyFor(el, label), label: label, value: valueOf(el) }
-    ));
-  } catch (e) {}
-};
-const handler = (ev) => report(ev.composedPath ? ev.composedPath()[0] : ev.target);
-document.addEventListener('change', handler, { capture: true });
-document.addEventListener('focusout', handler, { capture: true });
-})()"""
-
 
 async def _snapshot_fields(session) -> dict:
     """Return ``{key: {"label", "value"}}`` for every field in the DOM.
@@ -709,58 +686,26 @@ def _diff_corrections(agent_snapshot: dict, user_snapshot: dict) -> dict:
     return corrections
 
 
-async def _watch_fields(session, agent_snapshot: dict, user_snapshot: dict,
-                        url: str) -> dict:
-    """Track the user's edits via a CDP binding, then persist corrections.
+async def _watch_fields(session, agent_snapshot: dict, url: str) -> dict:
+    """Let the user edit the form, then diff the final DOM and persist corrections.
 
-    Replaces the old poll loop. :data:`_LISTENER_JS` reports each completed edit
-    through the ``__autofill_report`` binding; ``_on_binding`` writes it into
-    *user_snapshot* live. We block on a single Enter prompt, then diff against
-    *agent_snapshot* and save in a ``finally`` — so Ctrl-C, a closed browser, or
-    a normal Enter all flush whatever was captured. Returns the corrections dict.
+    *agent_snapshot* is the baseline the caller took right after the agent finished.
+    We block on a single Enter prompt while the user reviews and edits in the
+    browser, then re-read the whole DOM and diff. Reading the final DOM — rather
+    than tracking edit events — is what catches custom dropdowns (Airtable,
+    react-select) that fire no ``change``/``focusout``. The re-read and save run in
+    a ``finally`` so Ctrl-C or a normal Enter both flush; a dead browser snapshots
+    to ``{}`` and simply yields no corrections. Returns the corrections dict.
     """
+    corrections: dict = {}
     try:
-        cdp_session = await session.get_or_create_cdp_session(focus=False)
-        send = cdp_session.cdp_client.send
-        sid = cdp_session.session_id
-        await send.Runtime.enable(session_id=sid)
-        await send.Runtime.addBinding({"name": "__autofill_report"}, session_id=sid)
-
-        def _on_binding(event, session_id=None):
-            if event.get("name") != "__autofill_report":
-                return
-            try:
-                payload = json.loads(event.get("payload") or "{}")
-            except Exception:
-                return
-            key = (payload.get("key") or "").strip()
-            label = (payload.get("label") or "").strip()
-            if (not key or _SENSITIVE_FIELD_RE.search(key)
-                    or _SENSITIVE_FIELD_RE.search(label)):
-                return
-            user_snapshot[key] = {
-                "label": label or key,
-                "value": payload.get("value", ""),
-            }
-
-        cdp_session.cdp_client.register.Runtime.bindingCalled(_on_binding)
-        # addScriptToEvaluateOnNewDocument only affects FUTURE documents — inject
-        # into the page that's already open, too.
-        await send.Page.addScriptToEvaluateOnNewDocument(
-            {"source": _LISTENER_JS}, session_id=sid
-        )
-        await send.Runtime.evaluate({"expression": _LISTENER_JS}, session_id=sid)
-    except Exception as exc:
-        console.print(f"[err]Warning:[/] Could not start edit tracking: {exc}")
-
-    try:
-        # to_thread keeps the blocking prompt off the running event loop; edits
-        # already live in user_snapshot, so the finally flushes on any exit.
+        # to_thread keeps the blocking prompt off the running event loop.
         await asyncio.to_thread(
             _ask,
             "Review and edit the form in the browser, then press Enter here when done…",
         )
     finally:
+        user_snapshot = await _snapshot_fields(session)
         corrections = _diff_corrections(agent_snapshot, user_snapshot)
         if corrections:
             _save_corrections(url, corrections)
@@ -1063,8 +1008,8 @@ Rules:
         break
     agent_run_elapsed = int(time.monotonic() - run_start)
     try:
-        # Snapshot what the agent filled (full-DOM baseline), then track the
-        # user's live edits until they press Enter.
+        # Snapshot what the agent filled (full-DOM baseline), then re-snapshot
+        # after the user edits to diff out their corrections.
         console.print(
             "\n[info]Capturing form state — review and edit in the browser.[/]"
         )
@@ -1090,11 +1035,9 @@ Rules:
 
         corrections: dict = {}
         if agent.browser_session is not None:
-            # Copy inner dicts so live edits never mutate the agent baseline.
-            user_snapshot = {k: dict(v) for k, v in agent_snapshot.items()}
             try:
                 corrections = await _watch_fields(
-                    agent.browser_session, agent_snapshot, user_snapshot, url
+                    agent.browser_session, agent_snapshot, url
                 )
             except Exception as exc:
                 console.print(f"[err]Warning:[/] Could not track field changes: {exc}")
