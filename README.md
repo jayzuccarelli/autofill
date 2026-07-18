@@ -5,7 +5,7 @@
 
 <img src=".github/assets/phil.svg" alt="Phil, the autofill octopus" width="180" align="left">
 
-AI-powered form autofill: describe yourself once, then point it at any web form and it fills every field for you. You review and submit manually.
+AI-powered form autofill: describe yourself once, then point it at any web form — a signup, an event registration, an application — and it fills every field for you. You review and submit manually.
 
 Meet **Phil** — eight hands on the keyboard so you don't have to use any.
 
@@ -43,7 +43,7 @@ autofill
 The first time you run it, autofill walks you through:
 1. **Profile** — asks your name, date of birth, email, phone, location, socials, and a short summary; saves to `knowledge/profile.md`.
 2. **Provider** — lets you pick a provider (Browser Use, OpenAI, Anthropic, or local Ollama), then paste your key (skipped for Ollama); saves to `.env`.
-3. **Extra files** — optionally add resumes, cover letters, etc. to `knowledge/`.
+3. **Extra files** — optionally add supporting documents (PDFs, docs) to `knowledge/`.
 4. **Builds the database** — indexes everything under `knowledge/` so it's ready.
 
 #### Providers
@@ -58,7 +58,7 @@ The first time you run it, autofill walks you through:
 ### Fill a form
 
 ```bash
-autofill "https://jobs.example.com/apply"
+autofill "https://example.com/register"
 ```
 
 The agent opens a browser, fills the form, and leaves it open for you to review and submit.
@@ -66,7 +66,7 @@ The agent opens a browser, fills the form, and leaves it open for you to review 
 > **Always wrap the URL in quotes.** Bare URLs with `?` or `&` are interpreted by the shell — `&` backgrounds the command and your URL gets truncated. Quoting hands the full URL to autofill verbatim.
 
 ```bash
-autofill --provider anthropic "https://jobs.example.com/apply?ref=xyz"  # override provider
+autofill --provider anthropic "https://example.com/register?ref=xyz"  # override provider
 ```
 
 ### Uninstall
@@ -79,15 +79,13 @@ autofill uninstall
 
 ## What works best
 
-autofill has been tested with:
+autofill handles most single- and multi-page web forms — signups, event registrations, surveys, membership and application forms, and more. Tested end-to-end against:
 
-- **Greenhouse** (`*.greenhouse.io`)
-- **Lever** (`jobs.lever.co`)
-- **Ashby** (`jobs.ashbyhq.com`)
-- **Workable** (`apply.workable.com`)
 - Generic single-page HTML forms (Google Forms, Typeform, etc.)
+- Multi-step forms and portals, including ones behind a login
+- Common hosted-form platforms — Greenhouse (`*.greenhouse.io`), Lever (`jobs.lever.co`), Ashby (`jobs.ashbyhq.com`), Workable (`apply.workable.com`)
 
-### Sites that require a login (Workday, iCIMS, etc.)
+### Sites that require a login (member portals, Workday, etc.)
 
 These now work. autofill runs in a **persistent browser profile** (`~/.autofill/browser-profile`), so your logins are remembered across runs.
 
@@ -102,7 +100,7 @@ These now work. autofill runs in a **persistent browser profile** (`~/.autofill/
 ### Known limitations
 
 - **CAPTCHAs** — Cloudflare challenges, reCAPTCHA, and similar bot checks halt the agent. The browser stays open so you can solve them manually, but the agent won't resume automatically.
-- **Very long multi-step apps** — supported up to ~50 LLM steps (configurable in `Config.agent_max_steps`); longer applications may exhaust the budget before reaching the final review screen.
+- **Very long multi-step forms** — supported up to ~50 LLM steps (configurable in `Config.agent_max_steps`); longer forms may exhaust the budget before reaching the final review screen.
 
 ---
 
