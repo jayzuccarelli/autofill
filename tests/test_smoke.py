@@ -649,3 +649,42 @@ class TestCookiejarToStorageState:
 
     def test_empty_jar_yields_empty_cookies(self):
         assert _cookiejar_to_storage_state([]) == {"cookies": [], "origins": []}
+
+
+class TestMigrateLegacyEnv:
+    """The legacy .env sits in the install dir, which install.sh lets you relocate."""
+
+    def _fake_install(self, tmp_path, monkeypatch):
+        """Point agent.__file__ at a fake install dir and return its .env path."""
+        install_dir = tmp_path / "custom-install"
+        (install_dir / "autofill").mkdir(parents=True)
+        monkeypatch.setattr(
+            agent_mod, "__file__", str(install_dir / "autofill" / "agent.py")
+        )
+        return install_dir / ".env"
+
+    def test_moves_key_out_of_custom_install_dir(self, tmp_path, tmp_env, monkeypatch):
+        legacy = self._fake_install(tmp_path, monkeypatch)
+        legacy.write_text("BROWSER_USE_API_KEY=bu_legacy\n")
+
+        agent_mod._migrate_legacy_env()
+
+        assert not legacy.exists()
+        assert tmp_env.read_text() == "BROWSER_USE_API_KEY=bu_legacy\n"
+
+    def test_does_not_clobber_an_existing_new_env(self, tmp_path, tmp_env, monkeypatch):
+        legacy = self._fake_install(tmp_path, monkeypatch)
+        legacy.write_text("BROWSER_USE_API_KEY=bu_old\n")
+        tmp_env.write_text("BROWSER_USE_API_KEY=bu_current\n")
+
+        agent_mod._migrate_legacy_env()
+
+        assert tmp_env.read_text() == "BROWSER_USE_API_KEY=bu_current\n"
+        assert legacy.exists()
+
+    def test_no_legacy_file_is_a_noop(self, tmp_path, tmp_env, monkeypatch):
+        self._fake_install(tmp_path, monkeypatch)
+
+        agent_mod._migrate_legacy_env()
+
+        assert not tmp_env.exists()

@@ -1758,15 +1758,19 @@ def cli() -> None:
 def _migrate_legacy_env() -> None:
     """Move a pre-existing .env from the install dir to its new $HOME location.
 
-    Older installs kept .env inside ~/autofill, where ``autofill uninstall`` wiped
-    it. It now lives under ~/.autofill so the key survives a reinstall; this
-    carries an existing key across on the first run of the new layout. Both paths
-    are under $HOME, so the rename stays on one filesystem.
+    Older installs kept .env inside the install dir, where ``autofill uninstall``
+    wiped it. It now lives under ~/.autofill so the key survives a reinstall; this
+    carries an existing key across on the first run of the new layout. The install
+    dir is the package's parent, not a hard-coded ~/autofill, because install.sh
+    honours INSTALL_DIR. shutil.move (not Path.replace) so a custom INSTALL_DIR on
+    another filesystem still migrates.
     """
-    legacy = Path.home() / "autofill" / ".env"
+    legacy = Path(__file__).resolve().parent.parent / ".env"
     if legacy.is_file() and not cfg.env_file.exists():
+        import shutil
+
         cfg.env_file.parent.mkdir(parents=True, exist_ok=True)
-        legacy.replace(cfg.env_file)
+        shutil.move(str(legacy), str(cfg.env_file))
 
 
 def _run_cli() -> None:
