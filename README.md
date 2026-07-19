@@ -5,9 +5,9 @@
 
 <img src=".github/assets/phil.svg" alt="Phil, the autofill octopus" width="180" align="left">
 
-AI-powered form autofill: describe yourself once, then point it at any web form — a signup, an event registration, an application — and it fills every field for you. You review and submit manually.
+AI-powered form autofill: describe yourself once, then point it at any web form (a signup, an event registration, an application) and it fills every field for you. You review and submit manually.
 
-Meet **Phil** — eight hands on the keyboard so you don't have to use any.
+Meet **Phil**: eight hands on the keyboard so you don't have to use any.
 
 <br clear="left">
 
@@ -41,19 +41,19 @@ autofill
 ```
 
 The first time you run it, autofill walks you through:
-1. **Profile** — asks your name, date of birth, email, phone, location, socials, and a short summary; saves to `knowledge/profile.md`.
-2. **Provider** — lets you pick a provider (Browser Use, OpenAI, Anthropic, or local Ollama), then paste your key (skipped for Ollama); saves to `.env`.
-3. **Extra files** — optionally add supporting documents (PDFs, docs) to `knowledge/`.
-4. **Builds the database** — indexes everything under `knowledge/` so it's ready.
+1. **Profile**: asks your name, date of birth, email, phone, location, socials, and a short summary; saves to `knowledge/profile.md`.
+2. **Provider**: lets you pick a provider (Browser Use, OpenAI, Anthropic, or local Ollama), then paste your key (skipped for Ollama); saves to `.env`.
+3. **Extra files**: optionally add supporting documents (PDFs, docs) to `knowledge/`.
+4. **Builds the database**: indexes everything under `knowledge/` so it's ready.
 
 #### Providers
 
 | Provider | Key env var | Notes |
 |---|---|---|
-| Browser Use | `BROWSER_USE_API_KEY` | Default — managed, no extra setup |
+| Browser Use | `BROWSER_USE_API_KEY` | Default; managed, no extra setup |
 | Anthropic | `ANTHROPIC_API_KEY` | Uses `claude-sonnet-4-6` |
 | OpenAI | `OPENAI_API_KEY` | Uses `gpt-4o` |
-| Ollama | _(none — local)_ | Experimental. Needs Ollama running locally; defaults to `qwen2.5:14b`. Override with `AUTOFILL_OLLAMA_MODEL`; point at a remote host with `OLLAMA_HOST`. Smaller models (≤7B) tend to misfill fields — 14B+ recommended. |
+| Ollama | _(none, local)_ | Experimental. Needs Ollama running locally; defaults to `qwen2.5:14b`. Override with `AUTOFILL_OLLAMA_MODEL`; point at a remote host with `OLLAMA_HOST`. Smaller models (≤7B) tend to misfill fields; 14B+ recommended. |
 
 ### Fill a form
 
@@ -63,7 +63,7 @@ autofill "https://example.com/register"
 
 The agent opens a browser, fills the form, and leaves it open for you to review and submit.
 
-> **Always wrap the URL in quotes.** Bare URLs with `?` or `&` are interpreted by the shell — `&` backgrounds the command and your URL gets truncated. Quoting hands the full URL to autofill verbatim.
+> **Always wrap the URL in quotes.** Bare URLs with `?` or `&` are interpreted by the shell; `&` backgrounds the command and your URL gets truncated. Quoting hands the full URL to autofill verbatim.
 
 ```bash
 autofill --provider anthropic "https://example.com/register?ref=xyz"  # override provider
@@ -79,35 +79,35 @@ autofill uninstall
 
 ## What works best
 
-autofill handles most single- and multi-page web forms — signups, event registrations, surveys, membership and application forms, and more. Tested end-to-end against:
+autofill handles most single- and multi-page web forms, including signups, event registrations, surveys, membership and application forms, and more. Tested end-to-end against:
 
 - Generic single-page HTML forms (Google Forms, Typeform, etc.)
 - Multi-step forms and portals, including ones behind a login
-- Common hosted-form platforms — Greenhouse (`*.greenhouse.io`), Lever (`jobs.lever.co`), Ashby (`jobs.ashbyhq.com`), Workable (`apply.workable.com`)
+- Common hosted-form platforms: Greenhouse (`*.greenhouse.io`), Lever (`jobs.lever.co`), Ashby (`jobs.ashbyhq.com`), Workable (`apply.workable.com`)
 
 ### Sites that require a login (member portals, Workday, etc.)
 
 These now work. autofill runs in a **persistent browser profile** (`~/.autofill/browser-profile`), so your logins are remembered across runs.
 
-- **Import your Chrome logins (optional).** During setup, autofill offers to import your existing Chrome cookies (sessions, never passwords) so it starts already signed in to sites you use. Best-effort — if Chrome's cookie store can't be read on your system, just use the manual flow below.
+- **Import your Chrome logins (optional).** During setup, autofill offers to import your existing Chrome cookies (sessions, never passwords) so it starts already signed in to sites you use. Best-effort: if Chrome's cookie store can't be read on your system, just use the manual flow below.
 - **Sign in once per site.** When the agent hits a sign-in or sign-up wall:
-  1. It **stops and waits** — it never types your credentials itself.
+  1. It **stops and waits**; it never types your credentials itself.
   2. You log in (or create the account) manually in the open browser window, handling any MFA, then press **Enter** in the terminal.
-  3. The agent reloads the form — now authenticated — and fills it.
+  3. The agent reloads the form, now authenticated, and fills it.
 
   Because the session is saved, later runs go straight to the form.
 
 ### Known limitations
 
-- **CAPTCHAs** — Cloudflare challenges, reCAPTCHA, and similar bot checks halt the agent. The browser stays open so you can solve them manually, but the agent won't resume automatically.
-- **Very long multi-step forms** — supported up to ~50 LLM steps (configurable in `Config.agent_max_steps`); longer forms may exhaust the budget before reaching the final review screen.
+- **CAPTCHAs**: Cloudflare challenges, reCAPTCHA, and similar bot checks halt the agent. The browser stays open so you can solve them manually, but the agent won't resume automatically.
+- **Very long multi-step forms**: supported up to ~50 LLM steps (configurable in `Config.agent_max_steps`); longer forms may exhaust the budget before reaching the final review screen.
 
 ---
 
 ## Notes
 
-- The agent will **not** click Submit — you always review first
-- Learns from your corrections — edits you make before submitting are remembered for next time
+- The agent will **not** click Submit; you always review first
+- Learns from your corrections: edits you make before submitting are remembered for next time
 - Run `autofill` again any time to re-run setup if something is missing
 - Edit `knowledge/profile.md` or add files to `knowledge/` to update your info; the database re-indexes on each run
 - Any `.pdf`, `.doc`, or `.docx` in `knowledge/` is offered to the agent for file-upload fields; it picks which file matches which upload based on form labels
@@ -115,7 +115,7 @@ These now work. autofill runs in a **persistent browser profile** (`~/.autofill/
 
 ## Privacy & telemetry
 
-Your profile and documents stay on your machine — autofill reads them locally and stores corrections locally. Relevant excerpts are sent to the LLM provider you configured (Browser Use, OpenAI, or Anthropic) so it can fill in form fields; that content is subject to your provider's data-handling policy. Choose the Ollama provider to keep everything on your machine — no profile excerpts leave your network. Passwords, SSNs, and similar sensitive fields are stripped before any corrections are saved.
+Your profile and documents stay on your machine; autofill reads them locally and stores corrections locally. Relevant excerpts are sent to the LLM provider you configured (Browser Use, OpenAI, or Anthropic) so it can fill in form fields; that content is subject to your provider's data-handling policy. Choose the Ollama provider to keep everything on your machine, so no profile excerpts leave your network. Passwords, SSNs, and similar sensitive fields are stripped before any corrections are saved.
 
 autofill collects **anonymous** usage events (tool version, OS, LLM provider, whether a run completed) to help prioritize development. No personal data, no form content, no URLs. To opt out, set `AUTOFILL_TELEMETRY=0` in your shell:
 
@@ -130,7 +130,7 @@ echo 'export AUTOFILL_TELEMETRY=0' >> ~/.bash_profile
 
 Then open a new terminal.
 
-Crash reports (Sentry) are **off by default** — autofill handles personal profile data, and stack frames can incidentally capture anything in scope, so we don't ship them unless you ask. If you'd like to send crash reports to help fix bugs, opt in with `AUTOFILL_SENTRY=1`:
+Crash reports (Sentry) are **off by default**: autofill handles personal profile data, and stack frames can incidentally capture anything in scope, so we don't ship them unless you ask. If you'd like to send crash reports to help fix bugs, opt in with `AUTOFILL_SENTRY=1`:
 
 ```bash
 echo 'export AUTOFILL_SENTRY=1' >> ~/.zshrc   # or ~/.bashrc / ~/.bash_profile
@@ -138,4 +138,4 @@ echo 'export AUTOFILL_SENTRY=1' >> ~/.zshrc   # or ~/.bashrc / ~/.bash_profile
 
 ## Contributing
 
-Found a bug or have a feature idea? [Open an issue](https://github.com/jayzuccarelli/autofill/issues) — there are templates for both. PRs welcome; start with [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup and [`AGENTS.md`](AGENTS.md) for architecture. MIT licensed.
+Found a bug or have a feature idea? [Open an issue](https://github.com/jayzuccarelli/autofill/issues). There are templates for both. PRs welcome; start with [`CONTRIBUTING.md`](CONTRIBUTING.md) for setup and [`AGENTS.md`](AGENTS.md) for architecture. MIT licensed.
