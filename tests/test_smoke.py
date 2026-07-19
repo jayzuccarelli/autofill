@@ -2,6 +2,7 @@
 
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -19,6 +20,7 @@ from autofill.agent import (
     _is_ambient_key,
     _key_fingerprint,
     _llm,
+    _llm_failure_reason,
     _load_corrections,
     _normalize_dob,
     _parse_profile,
@@ -649,6 +651,66 @@ class TestCookiejarToStorageState:
 
     def test_empty_jar_yields_empty_cookies(self):
         assert _cookiejar_to_storage_state([]) == {"cookies": [], "origins": []}
+
+
+class _FakeHistory:
+    """Mirrors browser-use's AgentHistoryList: .history items plus .errors().
+
+    Steps are numbered from `first_step`; browser-use reserves 0 for the
+    synthetic initial-navigation entry it writes before calling the LLM.
+    """
+
+    def __init__(self, outputs, errors, first_step=1):
+        self.history = [
+            SimpleNamespace(
+                model_output=out,
+                metadata=SimpleNamespace(step_number=first_step + i),
+            )
+            for i, out in enumerate(outputs)
+        ]
+        self._errors = errors
+
+    def errors(self):
+        return self._errors
+
+
+class TestLlmFailureReason:
+    def test_none_when_the_model_produced_output(self):
+        # The agent acted; whatever happened next isn't an LLM failure.
+        assert _llm_failure_reason(_FakeHistory(["step"], [None])) is None
+
+    def test_none_even_when_a_step_errored_but_output_exists(self):
+        h = _FakeHistory(["step"], ["element not found"])
+        assert _llm_failure_reason(h) is None
+
+    def test_reports_the_403_that_stopped_the_run(self):
+        # Example case: browser-use free tier is blocked from the LLM gateway, so
+        # every step 403s, no output is ever produced, and nothing gets filled.
+        blocked = (
+            "API request failed: Free tier accounts are not allowed to use the"
+            " LLM Gateway. Upgrade your subscription."
+        )
+        h = _FakeHistory([], [blocked, blocked])
+        assert _llm_failure_reason(h) == blocked
+
+    def test_skips_none_entries_to_find_the_first_real_error(self):
+        h = _FakeHistory([], [None, None, "boom"])
+        assert _llm_failure_reason(h) == "boom"
+
+    def test_empty_string_when_no_output_and_no_error_text(self):
+        # Still a failure — distinguishable from None, so the caller reports it.
+        assert _llm_failure_reason(_FakeHistory([], [])) == ""
+
+    def test_initial_navigation_alone_is_not_model_output(self):
+        # browser-use writes the initial navigation to history as step 0 with a
+        # synthetic model_output, before any LLM call. Counting it would mask
+        # every provider failure, since history is then never empty.
+        h = _FakeHistory(["Initial navigation"], ["403 Forbidden"], first_step=0)
+        assert _llm_failure_reason(h) == "403 Forbidden"
+
+    def test_real_step_after_the_initial_navigation_counts(self):
+        h = _FakeHistory(["Initial navigation", "step"], [None], first_step=0)
+        assert _llm_failure_reason(h) is None
 
 
 class TestMigrateLegacyEnv:
