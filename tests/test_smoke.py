@@ -84,6 +84,15 @@ def tmp_corrections(tmp_path, monkeypatch):
     object.__setattr__(cfg, "corrections_file", type(cfg).corrections_file)
 
 
+@pytest.fixture
+def tmp_env(tmp_path):
+    """Redirect cfg.env_file to a tmp path despite Config being frozen."""
+    path = tmp_path / ".env"
+    object.__setattr__(cfg, "env_file", path)
+    yield path
+    object.__setattr__(cfg, "env_file", type(cfg).env_file)
+
+
 class TestCorrectionsRoundtrip:
     def test_save_strips_sensitive_then_load_returns_safe_only(self, tmp_corrections):
         _save_corrections(
@@ -344,14 +353,13 @@ class TestIsAmbientKey:
         assert _is_ambient_key("anthropic") is False
 
     def test_blank_env_file_line_does_not_count_as_configured(
-        self, monkeypatch, tmp_path
+        self, monkeypatch, tmp_env
     ):
         # `ANTHROPIC_API_KEY=` is how you switch a key off while keeping the line.
         # dotenv_values still reports the name, so a naive membership test would
         # treat it as explicit config and hand the ambient guard back the very key
         # the user just disabled (JAY-93).
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text("ANTHROPIC_API_KEY=\nOPENAI_API_KEY=oa-key\n")
+        tmp_env.write_text("ANTHROPIC_API_KEY=\nOPENAI_API_KEY=oa-key\n")
         monkeypatch.setattr(
             agent_mod,
             "_AMBIENT_ENV_KEYS",
@@ -373,38 +381,31 @@ class TestIsAmbientKey:
 class TestEnvSet:
     """`.env` writes replace and remove, rather than piling up."""
 
-    def test_replaces_rather_than_appends(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text("A=1\nAUTOFILL_PROVIDER=openai\nB=2\n")
+    def test_replaces_rather_than_appends(self, tmp_env):
+        tmp_env.write_text("A=1\nAUTOFILL_PROVIDER=openai\nB=2\n")
         agent_mod._env_set("AUTOFILL_PROVIDER", "browseruse")
-        assert (tmp_path / ".env").read_text() == (
-            "A=1\nB=2\nAUTOFILL_PROVIDER=browseruse\n"
-        )
+        assert tmp_env.read_text() == "A=1\nB=2\nAUTOFILL_PROVIDER=browseruse\n"
 
-    def test_removes_when_value_is_none(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text("A=1\nAUTOFILL_PROVIDER=openai\n")
+    def test_removes_when_value_is_none(self, tmp_env):
+        tmp_env.write_text("A=1\nAUTOFILL_PROVIDER=openai\n")
         agent_mod._env_set("AUTOFILL_PROVIDER", None)
-        assert (tmp_path / ".env").read_text() == "A=1\n"
+        assert tmp_env.read_text() == "A=1\n"
 
-    def test_handles_missing_trailing_newline(self, monkeypatch, tmp_path):
+    def test_handles_missing_trailing_newline(self, tmp_env):
         # Appending to a file with no final newline glues lines together.
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text("A=1")
+        tmp_env.write_text("A=1")
         agent_mod._env_set("B", "2")
-        assert (tmp_path / ".env").read_text() == "A=1\nB=2\n"
+        assert tmp_env.read_text() == "A=1\nB=2\n"
 
-    def test_creates_file_when_absent(self, monkeypatch, tmp_path):
-        monkeypatch.chdir(tmp_path)
+    def test_creates_file_when_absent(self, tmp_env):
         agent_mod._env_set("A", "1")
-        assert (tmp_path / ".env").read_text() == "A=1\n"
+        assert tmp_env.read_text() == "A=1\n"
 
-    def test_does_not_match_on_prefix(self, monkeypatch, tmp_path):
+    def test_does_not_match_on_prefix(self, tmp_env):
         # AUTOFILL_PROVIDER must not eat AUTOFILL_PROVIDER_EXTRA.
-        monkeypatch.chdir(tmp_path)
-        (tmp_path / ".env").write_text("AUTOFILL_PROVIDER_EXTRA=keep\n")
+        tmp_env.write_text("AUTOFILL_PROVIDER_EXTRA=keep\n")
         agent_mod._env_set("AUTOFILL_PROVIDER", None)
-        assert (tmp_path / ".env").read_text() == "AUTOFILL_PROVIDER_EXTRA=keep\n"
+        assert tmp_env.read_text() == "AUTOFILL_PROVIDER_EXTRA=keep\n"
 
 
 class TestProviderReady:
@@ -449,31 +450,30 @@ class TestPersistProviderChoice:
     common paths must not create one at all (JAY-93).
     """
 
-    def _setup(self, monkeypatch, tmp_path):
-        # cfg is frozen and cfg.env_file is relative, so chdir is how we redirect it.
-        monkeypatch.chdir(tmp_path)
+    def _setup(self, monkeypatch, tmp_env):
+        # tmp_env redirects the (now absolute) cfg.env_file to a tmp path.
         monkeypatch.delenv("AUTOFILL_PROVIDER", raising=False)
         monkeypatch.delenv("AUTOFILL_OLLAMA_MODEL", raising=False)
         for info in _PROVIDERS.values():
             if info.get("env"):
                 monkeypatch.delenv(info["env"], raising=False)
         monkeypatch.setattr(agent_mod, "_AMBIENT_ENV_KEYS", frozenset())
-        return tmp_path / ".env"
+        return tmp_env
 
-    def test_writes_nothing_when_inference_agrees(self, monkeypatch, tmp_path):
+    def test_writes_nothing_when_inference_agrees(self, monkeypatch, tmp_env):
         # The whole point: picking Browser Use with a Browser Use key present
         # leaves no pointer behind, so there's nothing to go stale.
-        env_file = self._setup(monkeypatch, tmp_path)
+        env_file = self._setup(monkeypatch, tmp_env)
         monkeypatch.setenv(_PROVIDERS["browseruse"]["env"], "bu-key")
         agent_mod._persist_provider_choice("browseruse")
         assert not env_file.exists()
         assert "AUTOFILL_PROVIDER" not in os.environ
 
-    def test_removes_stale_pointer_inference_outvotes(self, monkeypatch, tmp_path):
+    def test_removes_stale_pointer_inference_outvotes(self, monkeypatch, tmp_env):
         # A keyless AUTOFILL_PROVIDER=openai is dormant, not harmless: inference
         # outvotes it today, but it outranks every key the moment an OPENAI_API_KEY
         # appears. Confirming Browser Use has to clear it, not just ignore it.
-        env_file = self._setup(monkeypatch, tmp_path)
+        env_file = self._setup(monkeypatch, tmp_env)
         env_file.write_text("AUTOFILL_PROVIDER=openai\nBROWSER_USE_API_KEY=bu-key\n")
         monkeypatch.setenv(_PROVIDERS["browseruse"]["env"], "bu-key")
         monkeypatch.setenv("AUTOFILL_PROVIDER", "openai")
@@ -485,20 +485,20 @@ class TestPersistProviderChoice:
         monkeypatch.setenv(_PROVIDERS["openai"]["env"], "oa-key")
         assert _detect_provider() == "browseruse"
 
-    def test_writes_pointer_to_break_a_real_tie(self, monkeypatch, tmp_path):
+    def test_writes_pointer_to_break_a_real_tie(self, monkeypatch, tmp_env):
         # OpenAI chosen while a Browser Use key is also present: inference walks
         # registry order and would say browseruse, so the pick must be recorded.
-        env_file = self._setup(monkeypatch, tmp_path)
+        env_file = self._setup(monkeypatch, tmp_env)
         monkeypatch.setenv(_PROVIDERS["browseruse"]["env"], "bu-key")
         monkeypatch.setenv(_PROVIDERS["openai"]["env"], "oa-key")
         agent_mod._persist_provider_choice("openai")
         assert "AUTOFILL_PROVIDER=openai" in env_file.read_text()
         assert os.environ["AUTOFILL_PROVIDER"] == "openai"
 
-    def test_writes_pointer_for_deliberate_ambient_key(self, monkeypatch, tmp_path):
+    def test_writes_pointer_for_deliberate_ambient_key(self, monkeypatch, tmp_env):
         # Anthropic picked on purpose while its key is only in the shell:
         # inference skips ambient keys, so record the choice.
-        env_file = self._setup(monkeypatch, tmp_path)
+        env_file = self._setup(monkeypatch, tmp_env)
         ak = _PROVIDERS["anthropic"]["env"]
         monkeypatch.setenv(ak, "ak-key")
         monkeypatch.setattr(agent_mod, "_AMBIENT_ENV_KEYS", frozenset({ak}))
@@ -649,3 +649,42 @@ class TestCookiejarToStorageState:
 
     def test_empty_jar_yields_empty_cookies(self):
         assert _cookiejar_to_storage_state([]) == {"cookies": [], "origins": []}
+
+
+class TestMigrateLegacyEnv:
+    """The legacy .env sits in the install dir, which install.sh lets you relocate."""
+
+    def _fake_install(self, tmp_path, monkeypatch):
+        """Point agent.__file__ at a fake install dir and return its .env path."""
+        install_dir = tmp_path / "custom-install"
+        (install_dir / "autofill").mkdir(parents=True)
+        monkeypatch.setattr(
+            agent_mod, "__file__", str(install_dir / "autofill" / "agent.py")
+        )
+        return install_dir / ".env"
+
+    def test_moves_key_out_of_custom_install_dir(self, tmp_path, tmp_env, monkeypatch):
+        legacy = self._fake_install(tmp_path, monkeypatch)
+        legacy.write_text("BROWSER_USE_API_KEY=bu_legacy\n")
+
+        agent_mod._migrate_legacy_env()
+
+        assert not legacy.exists()
+        assert tmp_env.read_text() == "BROWSER_USE_API_KEY=bu_legacy\n"
+
+    def test_does_not_clobber_an_existing_new_env(self, tmp_path, tmp_env, monkeypatch):
+        legacy = self._fake_install(tmp_path, monkeypatch)
+        legacy.write_text("BROWSER_USE_API_KEY=bu_old\n")
+        tmp_env.write_text("BROWSER_USE_API_KEY=bu_current\n")
+
+        agent_mod._migrate_legacy_env()
+
+        assert tmp_env.read_text() == "BROWSER_USE_API_KEY=bu_current\n"
+        assert legacy.exists()
+
+    def test_no_legacy_file_is_a_noop(self, tmp_path, tmp_env, monkeypatch):
+        self._fake_install(tmp_path, monkeypatch)
+
+        agent_mod._migrate_legacy_env()
+
+        assert not tmp_env.exists()
