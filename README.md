@@ -5,7 +5,7 @@
 
 <img src=".github/assets/phil.svg" alt="Phil, the autofill octopus" width="180" align="left">
 
-AI-powered form autofill: describe yourself once, then point it at any web form (a signup, an event registration, an application) and it fills every field for you. You review and submit manually.
+AI-powered form autofill: describe yourself once, then point it at any web form and it fills every field for you. You review and submit manually.
 
 Meet **Phil**: eight hands on the keyboard so you don't have to use any.
 
@@ -79,11 +79,10 @@ autofill uninstall
 
 ## What works best
 
-autofill handles most single- and multi-page web forms, including signups, event registrations, surveys, membership and application forms, and more. Tested end-to-end against:
+autofill has been tested with:
 
 - Generic single-page HTML forms (Google Forms, Typeform, etc.)
-- Multi-step forms and portals, including ones behind a login
-- Common hosted-form platforms: Greenhouse (`*.greenhouse.io`), Lever (`jobs.lever.co`), Ashby (`jobs.ashbyhq.com`), Workable (`apply.workable.com`)
+- Hosted-form platforms: Greenhouse (`*.greenhouse.io`), Lever (`jobs.lever.co`), Ashby (`jobs.ashbyhq.com`), Workable (`apply.workable.com`)
 
 ### Sites that require a login (member portals, Workday, etc.)
 
