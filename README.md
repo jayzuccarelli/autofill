@@ -113,7 +113,7 @@ These now work. autofill runs in a **persistent browser profile** (`~/.autofill/
 - Run `autofill` again any time to re-run setup if something is missing
 - Edit `knowledge/profile.md` or add files to `knowledge/` to update your info; the database re-indexes on each run
 - Any `.pdf`, `.doc`, or `.docx` in `knowledge/` is offered to the agent for file-upload fields; it picks which file matches which upload based on form labels
-- `knowledge/` and `.env` always live inside the install directory (`~/autofill/` by default), regardless of where you run `autofill` from
+- `knowledge/` lives inside the install directory (`~/autofill/` by default); `.env` lives in `~/.autofill/`, so your API key survives an uninstall and reinstall
 
 ## Privacy & telemetry
 
