@@ -13,7 +13,7 @@ import time
 from dataclasses import dataclass
 from datetime import UTC, datetime
 from pathlib import Path
-from typing import TYPE_CHECKING, Any
+from typing import TYPE_CHECKING, Any, cast
 from urllib.parse import urlparse
 
 import questionary
@@ -626,150 +626,205 @@ def _llm(provider: str) -> Any:
     )
 
 
-_FORM_TAGS = frozenset({"input", "textarea", "select"})
-_FORM_ROLES = frozenset({"textbox", "combobox", "listbox", "spinbutton", "searchbox",
-                          "radio", "checkbox", "switch"})
+# ---------------------------------------------------------------------------
+# Field capture: a full-DOM CDP collector for the baseline snapshot, plus an
+# event-driven listener that pushes each user edit as it happens. Both embed the
+# shared JS helpers below so the baseline and the live tracker key a field the
+# same way.
+
+# JS helpers embedded in _COLLECT_JS:
+#   SEL      — form controls + ARIA widgets + contenteditable we track
+#   labelFor — human label: aria-label → aria-labelledby → <label for> →
+#              wrapping <label> → placeholder
+#   keyFor   — stable identity: autocomplete token → name → id → label. Survives
+#              re-renders that reorder fields (unlike a positional label suffix).
+#   valueOf  — current value: .checked for checkboxes, the selected option for
+#              native radio groups (which collapse to one key) and custom
+#              dropdowns, textContent for contenteditable, else .value
+_FIELD_JS_HELPERS = r"""
+const SEL = 'input,textarea,select,[role="textbox"],[role="combobox"],' +
+  '[role="listbox"],[role="spinbutton"],[role="searchbox"],[role="radio"],' +
+  '[role="checkbox"],[role="switch"],[contenteditable="true"]';
+const labelFor = (el) => {
+  // Resolve referenced labels within the field's own root (shadow root or
+  // iframe document), not the top document — otherwise linked labels inside a
+  // shadow/iframe come back empty and skip label-based sensitive filtering.
+  const root = el.getRootNode();
+  const al = el.getAttribute('aria-label'); if (al) return al.trim();
+  const lb = el.getAttribute('aria-labelledby');
+  if (lb) {
+    const t = lb.split(/\s+/).map(function(id){
+      const n = root.getElementById ? root.getElementById(id)
+        : document.getElementById(id);
+      return n ? n.textContent : '';
+    }).join(' ').trim();
+    if (t) return t;
+  }
+  if (el.id) {
+    try {
+      const l = root.querySelector('label[for="' + CSS.escape(el.id) + '"]');
+      if (l) return l.textContent.trim();
+    } catch (e) {}
+  }
+  const anc = el.closest ? el.closest('label') : null;
+  if (anc) return anc.textContent.trim();
+  return (el.getAttribute('placeholder') || '').trim();
+};
+const keyFor = (el, label) => {
+  const ac = el.getAttribute('autocomplete');
+  if (ac && ac !== 'off' && ac !== 'on') return ac;
+  return el.getAttribute('name') || el.id || label;
+};
+const valueOf = (el) => {
+  const role = (el.getAttribute('role') || '').toLowerCase();
+  if (el.matches && el.matches('input[type="checkbox"]')) {
+    return el.checked ? 'true' : 'false';
+  }
+  if (el.matches && el.matches('input[type="radio"]')) {
+    // A native radio group shares one name, so keyFor collapses it to a single
+    // key. Report which option is selected (its value/label), not this element's
+    // checked bit — a bare true/false can't tell the agent which option to pick.
+    let sel = el.checked ? el : null;
+    if (el.name) {
+      const scope = el.form || el.getRootNode();
+      try {
+        sel = scope.querySelector('input[type="radio"][name="' +
+          CSS.escape(el.name) + '"]:checked') || sel;
+      } catch (e) {}
+    }
+    return sel ? (sel.value || labelFor(sel) || 'on') : '';
+  }
+  if (role === 'radio' || role === 'checkbox' || role === 'switch') {
+    return el.getAttribute('aria-checked') || 'false';
+  }
+  if (el.tagName === 'SELECT') {
+    // The visible option text is the human-readable answer; el.value is often an
+    // opaque code (<option value="US">United States</option>).
+    const o = el.selectedOptions ? el.selectedOptions[0] : null;
+    return o ? (o.text || o.value || '').trim() : (el.value || '');
+  }
+  if (el.isContentEditable) return (el.textContent || '').trim();
+  if (role === 'combobox' || role === 'listbox') {
+    if (el.value) return el.value;
+    const s = el.querySelector ?
+      el.querySelector('[aria-selected="true"]') : null;
+    return s ? s.textContent.trim() : '';
+  }
+  return el.value != null ? el.value : '';
+};
+"""
+
+# Walk the whole DOM (light + open shadow roots + same-origin iframes) and return
+# JSON [{key,label,value}]. Bypasses browser-use's viewport-filtered selector_map,
+# which only surfaced fields the agent could act on (Greenhouse reported 1 of N).
+# Cross-origin iframes are skipped — job-application forms are same-origin.
+_COLLECT_JS = "(() => {" + _FIELD_JS_HELPERS + r"""
+const out = [], seen = new Set();
+const walk = (root) => {
+  let nodes; try { nodes = root.querySelectorAll(SEL); } catch (e) { return; }
+  for (const el of nodes) {
+    if (seen.has(el) || el.disabled || el.type === 'hidden' ||
+        el.type === 'password') continue;
+    seen.add(el);
+    const label = labelFor(el);
+    out.push({ key: keyFor(el, label), label: label, value: valueOf(el) });
+  }
+  for (const el of root.querySelectorAll('*')) {
+    if (el.shadowRoot) walk(el.shadowRoot);
+  }
+  for (const f of root.querySelectorAll('iframe')) {
+    try { if (f.contentDocument) walk(f.contentDocument); } catch (e) {}
+  }
+};
+walk(document);
+return JSON.stringify(out);
+})()"""
 
 
-async def _snapshot_fields(session) -> dict:
-    """Snapshot form field values using browser-use's DOM + CDP value reads.
+async def _snapshot_fields(session) -> dict | None:
+    """Return ``{key: {"label", "value"}}`` for every field in the DOM.
 
-    **Field discovery and labeling** — browser-use's accessibility tree
-    (``get_browser_state_summary``).  Labels come from the browser's own
-    accessible-name computation, which works on every site.
+    One CDP ``Runtime.evaluate`` runs :data:`_COLLECT_JS`, which walks the whole
+    document (not browser-use's viewport-filtered selector_map), so below-the-fold
+    and shadow-DOM fields are captured too. Fields are keyed by stable identity
+    (autocomplete/name/id), not a positional label, so a saved correction still
+    lines up after the form re-renders. Sensitive fields are dropped.
 
-    **Live values** — CDP ``DOM.resolveNode`` + ``Runtime.callFunctionOn``
-    to read the JS ``.value`` property for each field.  HTML attributes
-    don't update when users type, but ``.value`` does.
+    Returns ``None`` (not ``{}``) if the read fails, so callers can tell a failed
+    snapshot from a genuinely empty page — diffing against a failed baseline would
+    log every populated field as a bogus correction.
     """
     try:
-        state = await session.get_browser_state_summary(include_screenshot=False)
-        if not state or not state.dom_state or not state.dom_state.selector_map:
-            return {}
-
         cdp_session = await session.get_or_create_cdp_session(focus=False)
-
-        result: dict[str, str] = {}
-        # Disambiguate repeated labels (multi-row employment history, duplicate
-        # "Address line", etc.) by suffixing "(2)", "(3)", …  Stable within a
-        # run and usually stable across runs on the same form.
-        seen_counts: dict[str, int] = {}
-        for _idx, node in state.dom_state.selector_map.items():
-            try:
-                tag = (node.tag_name or "").lower()
-                role = (node.ax_node.role or "").lower() if node.ax_node else ""
-
-                if tag not in _FORM_TAGS and role not in _FORM_ROLES:
-                    continue
-
-                attrs = node.attributes or {}
-
-                # Build label from accessibility name.
-                label = ""
-                if node.ax_node and node.ax_node.name:
-                    label = node.ax_node.name.strip()
-                if not label:
-                    label = (attrs.get("aria-label", "")
-                             or attrs.get("placeholder", "")
-                             or attrs.get("name", "")
-                             or attrs.get("id", "")
-                             or f"field_{_idx}")
-
-                # Skip sensitive fields (passwords, OTP, card numbers, etc.)
-                if _SENSITIVE_FIELD_RE.search(label):
-                    continue
-
-                seen_counts[label] = seen_counts.get(label, 0) + 1
-                key = (
-                    label
-                    if seen_counts[label] == 1
-                    else f"{label} ({seen_counts[label]})"
-                )
-
-                # Read live value via CDP.
-                value = await _read_live_value(cdp_session, node.backend_node_id, role)
-                if value is not None:
-                    result[key] = value
-            except Exception:
-                continue
-        return result
-    except Exception:
-        return {}
-
-
-async def _read_live_value(cdp_session, backend_node_id: int, role: str) -> str | None:
-    """Read the current JS .value (or checked state) of a DOM node via CDP."""
-    try:
-        resolve_result = await cdp_session.cdp_client.send.DOM.resolveNode(
-            {"backendNodeId": backend_node_id},
+        result = await cdp_session.cdp_client.send.Runtime.evaluate(
+            {"expression": _COLLECT_JS, "returnByValue": True},
             session_id=cdp_session.session_id,
         )
-        object_id = resolve_result.get("object", {}).get("objectId")
-        if not object_id:
-            return None
-
-        if role in ("checkbox", "radio", "switch"):
-            # Native inputs use .checked; ARIA widgets (e.g. div[role=radio])
-            # use the aria-checked attribute instead.
-            fn = (
-                "function() {"
-                "  if (typeof this.checked === 'boolean')"
-                "    return this.checked ? 'true' : 'false';"
-                "  var ac = this.getAttribute('aria-checked');"
-                "  if (ac) return ac;"
-                "  return 'false';"
-                "}"
-            )
-        elif role in ("combobox", "listbox"):
-            # Read both .value and aria-selected text for custom dropdowns.
-            fn = (
-                "function() {"
-                "  if (this.value) return this.value;"
-                "  var sel = this.querySelector('[aria-selected=\"true\"]');"
-                "  if (sel) return sel.textContent.trim();"
-                "  return '';"
-                "}"
-            )
-        else:
-            fn = "function() { return this.value || ''; }"
-
-        call_result = await cdp_session.cdp_client.send.Runtime.callFunctionOn(
-            {
-                "objectId": object_id,
-                "functionDeclaration": fn,
-                "returnByValue": True,
-            },
-            session_id=cdp_session.session_id,
-        )
-        return call_result.get("result", {}).get("value", "")
+        raw = (result.get("result") or {}).get("value") or "[]"
+        fields = json.loads(raw)
     except Exception:
         return None
 
+    out: dict[str, dict] = {}
+    for f in fields:
+        key = (f.get("key") or "").strip()
+        label = (f.get("label") or "").strip()
+        if (not key or _SENSITIVE_FIELD_RE.search(key)
+                or _SENSITIVE_FIELD_RE.search(label)):
+            continue
+        # Same-key collisions (e.g. two unlabelled fields sharing a name) collapse
+        # to the last occurrence — semantic keys make this rare, and it keeps the
+        # baseline consistent with the live listener, which can't know positions.
+        out[key] = {"label": label or key, "value": f.get("value", "")}
+    return out
 
-async def _poll_fields(session, snapshot: dict, interval: float = 1.0,
-                       timeout: float = 600, empty_exit_after: int = 5) -> None:
-    """Continuously update snapshot with current field values until *timeout*.
 
-    Transient empty reads (mid-navigation, shadow DOM hiccups) are tolerated,
-    but *empty_exit_after* consecutive empty reads are treated as "user
-    navigated away / submitted" and stop the loop.
+def _diff_corrections(agent_snapshot: dict, user_snapshot: dict) -> dict:
+    """Diff the agent's baseline against the user's final field values.
+
+    Both snapshots are ``{key: {"label", "value"}}``. Keeps genuine changes and
+    deletions (user cleared an agent-filled value — a "don't fill this" signal),
+    and drops no-ops where both sides are empty. Returns
+    ``{key: {"label", "agent", "user"}}``.
     """
-    loop = asyncio.get_running_loop()
-    deadline = loop.time() + timeout
-    empty_streak = 0
-    while loop.time() < deadline:
-        await asyncio.sleep(interval)
-        try:
-            current = await _snapshot_fields(session)
-        except Exception:
-            break
-        if current:
-            snapshot.update(current)
-            empty_streak = 0
-        else:
-            empty_streak += 1
-            if empty_streak >= empty_exit_after:
-                break
+    corrections: dict[str, dict] = {}
+    for key, u in user_snapshot.items():
+        a_val = agent_snapshot.get(key, {}).get("value", "")
+        u_val = u.get("value", "")
+        if a_val != u_val and (u_val or a_val):
+            corrections[key] = {
+                "label": u.get("label", key),
+                "agent": a_val,
+                "user": u_val,
+            }
+    return corrections
+
+
+async def _watch_fields(session, agent_snapshot: dict, url: str) -> dict:
+    """Let the user edit the form, then diff the final DOM and persist corrections.
+
+    *agent_snapshot* is the baseline the caller took right after the agent finished.
+    We block on a single Enter prompt while the user reviews and edits in the
+    browser, then re-read the whole DOM and diff. Reading the final DOM — rather
+    than tracking edit events — is what catches custom dropdowns (Airtable,
+    react-select) that fire no ``change``/``focusout``. The re-read and save run in
+    a ``finally`` so Ctrl-C or a normal Enter both flush; a dead browser snapshots
+    to ``None`` and simply yields no corrections. Returns the corrections dict.
+    """
+    corrections: dict = {}
+    try:
+        # to_thread keeps the blocking prompt off the running event loop.
+        await asyncio.to_thread(
+            _ask,
+            "Review and edit the form in the browser, then press Enter here when done…",
+        )
+    finally:
+        user_snapshot = await _snapshot_fields(session)
+        if user_snapshot is not None:
+            corrections = _diff_corrections(agent_snapshot, user_snapshot)
+            if corrections:
+                _save_corrections(url, corrections)
+    return corrections
 
 
 def _load_corrections(url: str) -> str:
@@ -795,7 +850,16 @@ def _load_corrections(url: str) -> str:
             merged[field] = change
     lines = [f"Previously corrected fields on {domain}:"]
     for field, change in merged.items():
-        lines.append(f"- {field}: use '{change['user']}' (not '{change['agent']}')")
+        # New entries carry a display label; old ones keyed by label fall back to it.
+        label = change.get("label", field)
+        user_val = change.get("user", "")
+        if user_val:
+            agent_val = change.get("agent", "")
+            lines.append(f"- {label}: use '{user_val}' (not '{agent_val}')")
+        else:
+            lines.append(
+                f"- {label}: leave BLANK — the user cleared this; do NOT fill it"
+            )
     return "\n".join(lines)
 
 
@@ -803,9 +867,10 @@ def _load_corrections(url: str) -> str:
 # which would otherwise let `password_field` and `auth_token` slip through.
 _SENSITIVE_FIELD_RE = re.compile(
     r"(?<![A-Za-z0-9])"
-    r"(password|passcode|otp|pin|2fa|ssn|social.?sec(?:urity)?|cvv|cvc"
-    r"|card.?num(?:ber)?|expir|exp_|secret|token|auth|passport|birth|dob"
-    r"|bank|routing|account.?num(?:ber)?)"
+    r"(password|passcode|otp|one.?time.?code|pin|2fa|ssn|social.?sec(?:urity)?"
+    r"|cvv|cvc|csc|card.?num(?:ber)?|cc.?num(?:ber)?|cc.?exp|expir|exp_"
+    r"|secret|token|auth|passport|birth|dob|bday|bank|routing"
+    r"|account.?num(?:ber)?)"
     r"(?![A-Za-z0-9])",
     re.IGNORECASE,
 )
@@ -817,7 +882,18 @@ def _save_corrections(url: str, corrections: dict) -> None:
     Sensitive fields (passwords, OTP, SSN, CVV, etc.) are stripped before
     writing so they are never persisted or later injected into an LLM prompt.
     """
-    safe = {k: v for k, v in corrections.items() if not _SENSITIVE_FIELD_RE.search(k)}
+    def _label(v: object) -> str:
+        if isinstance(v, dict):
+            lab = cast("dict[str, object]", v).get("label", "")
+            return lab if isinstance(lab, str) else ""
+        return ""
+
+    safe = {
+        k: v
+        for k, v in corrections.items()
+        if not _SENSITIVE_FIELD_RE.search(k)
+        and not _SENSITIVE_FIELD_RE.search(_label(v))
+    }
     if not safe:
         return
     entry = {
@@ -1103,21 +1179,26 @@ Rules:
             _capture("agent_no_model_output", {"provider": provider})
             return
 
-        # Snapshot what the agent filled, then poll for user edits until submit.
+        # Snapshot what the agent filled (full-DOM baseline), then re-snapshot
+        # after the user edits to diff out their corrections.
         console.print(
-            "\n[info]Capturing form state — please review and submit in the"
-            " browser.[/]"
+            "\n[info]Capturing form state — review and edit in the browser.[/]"
         )
-        agent_snapshot: dict = {}
-        user_snapshot: dict = {}
+        agent_snapshot: dict | None = None
         if agent.browser_session is not None:
             try:
                 agent_snapshot = await _snapshot_fields(agent.browser_session)
-                console.print(f"[dim]Tracking {len(agent_snapshot)} field(s)…[/]")
-                user_snapshot = dict(agent_snapshot)
             except Exception as exc:
                 console.print(f"[err]Warning:[/] Could not snapshot fields: {exc}")
+            if agent_snapshot is None:
+                console.print(
+                    "[err]Warning:[/] Couldn't read the form — skipping correction "
+                    "tracking this run."
+                )
+            else:
+                console.print(f"[dim]Tracking {len(agent_snapshot)} field(s)…[/]")
 
+        field_count = len(agent_snapshot or {})
         if not timed_out:
             _capture(
                 "form_fill_completed",
@@ -1126,23 +1207,21 @@ Rules:
                     "has_attachments": bool(attachments),
                     "last_step": last_step,
                     "elapsed_seconds": agent_run_elapsed,
-                    "field_count_bucket": _field_count_bucket(len(agent_snapshot)),
+                    "field_count_bucket": _field_count_bucket(field_count),
                 },
             )
 
-        if agent.browser_session is not None and agent_snapshot:
+        corrections: dict = {}
+        # Skip tracking when the baseline read failed — diffing against a failed
+        # snapshot would log every populated field as a bogus correction.
+        if agent.browser_session is not None and agent_snapshot is not None:
             try:
-                await _poll_fields(agent.browser_session, user_snapshot)
+                corrections = await _watch_fields(
+                    agent.browser_session, agent_snapshot, url
+                )
             except Exception as exc:
                 console.print(f"[err]Warning:[/] Could not track field changes: {exc}")
-
-        corrections = {
-            k: {"agent": agent_snapshot.get(k, ""), "user": v}
-            for k, v in user_snapshot.items()
-            if agent_snapshot.get(k) != v and v
-        }
         if corrections:
-            _save_corrections(url, corrections)
             _capture("corrections_saved", {"correction_count": len(corrections)})
             console.print(
                 f"[info]Saved {len(corrections)} correction(s) for next time.[/]"
