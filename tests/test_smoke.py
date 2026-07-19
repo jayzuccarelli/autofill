@@ -2,6 +2,7 @@
 
 import json
 import os
+from types import SimpleNamespace
 
 import pytest
 
@@ -595,12 +596,21 @@ class TestCookiejarToStorageState:
 
 
 class _FakeHistory:
-    def __init__(self, outputs, errors):
-        self._outputs = outputs
-        self._errors = errors
+    """Mirrors browser-use's AgentHistoryList: .history items plus .errors().
 
-    def model_outputs(self):
-        return self._outputs
+    Steps are numbered from `first_step`; browser-use reserves 0 for the
+    synthetic initial-navigation entry it writes before calling the LLM.
+    """
+
+    def __init__(self, outputs, errors, first_step=1):
+        self.history = [
+            SimpleNamespace(
+                model_output=out,
+                metadata=SimpleNamespace(step_number=first_step + i),
+            )
+            for i, out in enumerate(outputs)
+        ]
+        self._errors = errors
 
     def errors(self):
         return self._errors
@@ -632,3 +642,14 @@ class TestLlmFailureReason:
     def test_empty_string_when_no_output_and_no_error_text(self):
         # Still a failure — distinguishable from None, so the caller reports it.
         assert _llm_failure_reason(_FakeHistory([], [])) == ""
+
+    def test_initial_navigation_alone_is_not_model_output(self):
+        # browser-use writes the initial navigation to history as step 0 with a
+        # synthetic model_output, before any LLM call. Counting it would mask
+        # every provider failure, since history is then never empty.
+        h = _FakeHistory(["Initial navigation"], ["403 Forbidden"], first_step=0)
+        assert _llm_failure_reason(h) == "403 Forbidden"
+
+    def test_real_step_after_the_initial_navigation_counts(self):
+        h = _FakeHistory(["Initial navigation", "step"], [None], first_step=0)
+        assert _llm_failure_reason(h) is None
