@@ -59,7 +59,10 @@ class Config:
     collection: str = "profile"
     profile_example: Path = Path("knowledge/profile.example.md")
     profile: Path = Path("knowledge/profile.md")
-    env_file: Path = Path(".env")
+    # .env lives in $HOME, not the install dir, so the API key survives an
+    # `autofill uninstall` + reinstall (which deletes ~/autofill). Sits next to
+    # the browser profile below, which already persists there for the same reason.
+    env_file: Path = Path.home() / ".autofill" / ".env"
     # Persistent browser profile — lives in $HOME (not cwd) so logins survive
     # across runs. "chrome" must NOT appear in the path or browser-use copies it
     # to a throwaway temp dir (see BrowserProfile._copy_profile) and persistence
@@ -1436,6 +1439,7 @@ def _env_set(name: str, value: str | None) -> None:
         ]
     if value is not None:
         lines.append(f"{name}={value}")
+    cfg.env_file.parent.mkdir(parents=True, exist_ok=True)
     cfg.env_file.write_text("\n".join(lines) + "\n" if lines else "")
     cfg.env_file.chmod(0o600)
 
@@ -1719,6 +1723,10 @@ def _uninstall() -> None:
         console.print(f"  {p}")
     if install_dir in targets:
         console.print("[dim](including your profile and knowledge files)[/]")
+        console.print(
+            "[dim]Your API key and saved logins in ~/.autofill are kept; delete"
+            " that folder too for a clean slate.[/]"
+        )
 
     confirm = questionary.confirm(
         "Are you sure?", default=False, style=_Q_STYLE
@@ -1747,10 +1755,25 @@ def cli() -> None:
         raise SystemExit(130)
 
 
+def _migrate_legacy_env() -> None:
+    """Move a pre-existing .env from the install dir to its new $HOME location.
+
+    Older installs kept .env inside ~/autofill, where ``autofill uninstall`` wiped
+    it. It now lives under ~/.autofill so the key survives a reinstall; this
+    carries an existing key across on the first run of the new layout. Both paths
+    are under $HOME, so the rename stays on one filesystem.
+    """
+    legacy = Path.home() / "autofill" / ".env"
+    if legacy.is_file() and not cfg.env_file.exists():
+        cfg.env_file.parent.mkdir(parents=True, exist_ok=True)
+        legacy.replace(cfg.env_file)
+
+
 def _run_cli() -> None:
     """Parse arguments and dispatch to onboarding, status, or form fill."""
     os.chdir(Path(__file__).resolve().parent.parent)
-    load_dotenv()
+    _migrate_legacy_env()
+    load_dotenv(cfg.env_file)
     # browser-use's built-in telemetry is opt-out and would ship the task
     # prompt (which embeds the user's profile PII), the form URL, and typed
     # field values to browser-use's PostHog. Disable it before any Agent is
