@@ -1595,9 +1595,8 @@ def _onboard_api_key() -> None:
         ]
         if shared:
             console.print(
-                f"\n  Your shell has a [accent]{' and '.join(shared)}[/] key, but"
-                " other tools read that variable too — so pick what autofill"
-                " should use:\n"
+                f"\n  Found [accent]{' and '.join(shared)}[/] in your environment."
+                " Pick which autofill should use:\n"
             )
 
     names = list(_PROVIDERS)
