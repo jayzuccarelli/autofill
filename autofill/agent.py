@@ -1794,28 +1794,9 @@ def cli() -> None:
         raise SystemExit(130)
 
 
-def _migrate_legacy_env() -> None:
-    """Move a pre-existing .env from the install dir to its new $HOME location.
-
-    Older installs kept .env inside the install dir, where ``autofill uninstall``
-    wiped it. It now lives under ~/.autofill so the key survives a reinstall; this
-    carries an existing key across on the first run of the new layout. The install
-    dir is the package's parent, not a hard-coded ~/autofill, because install.sh
-    honours INSTALL_DIR. shutil.move (not Path.replace) so a custom INSTALL_DIR on
-    another filesystem still migrates.
-    """
-    legacy = Path(__file__).resolve().parent.parent / ".env"
-    if legacy.is_file() and not cfg.env_file.exists():
-        import shutil
-
-        cfg.env_file.parent.mkdir(parents=True, exist_ok=True)
-        shutil.move(str(legacy), str(cfg.env_file))
-
-
 def _run_cli() -> None:
     """Parse arguments and dispatch to onboarding, status, or form fill."""
     os.chdir(Path(__file__).resolve().parent.parent)
-    _migrate_legacy_env()
     load_dotenv(cfg.env_file)
     # browser-use's built-in telemetry is opt-out and would ship the task
     # prompt (which embeds the user's profile PII), the form URL, and typed
