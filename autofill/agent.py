@@ -1552,8 +1552,8 @@ def _onboard_api_key() -> None:
         ]
         if shared:
             console.print(
-                f"\n  Found [accent]{' and '.join(shared)}[/] in your environment"
-                " — pick which autofill should use:\n"
+                f"\n  Found [accent]{' and '.join(shared)}[/] in your environment."
+                " Pick which autofill should use:\n"
             )
 
     names = list(_PROVIDERS)
