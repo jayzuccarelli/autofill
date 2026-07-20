@@ -22,7 +22,6 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "browser-cookie3>=0.20",
     "browser-use>=0.12.6,<0.13",
     "chromadb>=0.6",
     "docx2txt>=0.8",
@@ -35,6 +34,10 @@ dependencies = [
 ]
 
 [project.optional-dependencies]
+# LGPL-3.0. Invoked in a subprocess, never imported, so it stays at arm's
+# length from this MIT codebase. Optional: without it, autofill falls back to
+# the manual sign-in flow.
+chrome-cookies = ["browser-cookie3>=0.20"]
 dev = [
     "pytest>=8.0",
     "pytest-asyncio>=0.23",

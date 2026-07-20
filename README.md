@@ -11,9 +11,6 @@ Meet **Phil**: eight hands on the keyboard so you don't have to use any.
 
 <br clear="left">
 
-
-Built on [browser-use](https://github.com/browser-use/browser-use).
-
 ---
 
 ## LLM Quickstart
@@ -32,7 +29,7 @@ Open a terminal and run:
 curl -fsSL https://raw.githubusercontent.com/jayzuccarelli/autofill/main/install.sh | bash
 ```
 
-Requires Python 3.11+ and a supported OS (macOS or Linux). Windows is untested.
+Requires `git` and a supported OS (macOS or Linux). Windows is untested. You don't need Python: the installer fetches uv, which brings its own.
 
 ### Setup
 

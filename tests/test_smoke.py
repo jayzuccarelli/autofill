@@ -2,6 +2,8 @@
 
 import json
 import os
+import subprocess
+import sys
 from types import SimpleNamespace
 
 import pytest
@@ -9,6 +11,7 @@ import pytest
 from autofill import __version__
 from autofill import agent as agent_mod
 from autofill.agent import (
+    _COOKIE_EXPORT_SCRIPT,
     _PROFILE_FIELDS,
     _PROVIDERS,
     _SENSITIVE_FIELD_RE,
@@ -18,6 +21,7 @@ from autofill.agent import (
     _detect_provider,
     _diff_corrections,
     _filter_blanks_to_form,
+    _import_chrome_cookies,
     _is_ambient_key,
     _key_fingerprint,
     _left_blank_fields,
@@ -50,7 +54,7 @@ class TestChunkText:
         assert all(c.strip() for c in chunks)
 
     def test_terminates_on_pathological_input(self):
-        # Single long word with no separators — must not loop forever.
+        # Single long word with no separators: must not loop forever.
         chunks = _chunk_text("x" * (cfg.chunk_size * 3))
         assert len(chunks) >= 2
 
@@ -61,7 +65,7 @@ class TestSensitiveFieldRegex:
         ["password", "Password", "PASSWORD", "passcode", "otp", "pin",
          "ssn", "cvv", "cvc", "secret", "passport", "dob",
          "card_number", "cardnumber", "card-number",
-         # Underscore-separated forms — these were silently slipping
+         # Underscore-separated forms: these were silently slipping
          # through under the old \b regex because _ is a word char.
          "password_field", "auth_token", "account_number", "bank_routing",
          "social_security", "passport_no", "date_of_birth",
@@ -147,7 +151,7 @@ class TestCorrectionsRoundtrip:
         assert not tmp_corrections.exists()
 
     def test_save_filters_by_label_not_just_key(self, tmp_corrections):
-        # Benign key, sensitive label — must still be stripped.
+        # Benign key, sensitive label: must still be stripped.
         _save_corrections(
             "https://example.com/form",
             {"field_7": {"label": "Social Security", "agent": "1", "user": "2"}},
@@ -237,7 +241,7 @@ class TestDetectProvider:
         assert _detect_provider() == "anthropic"
 
     def test_ollama_activates_via_explicit_override(self, monkeypatch):
-        # No API key needed for Ollama — opt-in via AUTOFILL_PROVIDER.
+        # No API key needed for Ollama: opt-in via AUTOFILL_PROVIDER.
         self._clear_keys(monkeypatch)
         monkeypatch.setenv("AUTOFILL_PROVIDER", "ollama")
         assert _detect_provider() == "ollama"
@@ -301,7 +305,7 @@ class TestKeyFingerprint:
         assert _key_fingerprint("anthropic") == ""
 
     def test_empty_for_keyless_provider(self):
-        # Ollama has no env key — fingerprint should be empty.
+        # Ollama has no env key: fingerprint should be empty.
         assert _key_fingerprint("ollama") == ""
 
     def test_empty_for_short_key(self, monkeypatch):
@@ -321,7 +325,7 @@ class TestIsAmbientKey:
 
     def test_true_when_shared_key_in_snapshot(self, monkeypatch):
         # ANTHROPIC_API_KEY was in the shell before .env loaded, and Claude reads
-        # that var too — so it says nothing about autofill.
+        # that var too: so it says nothing about autofill.
         self._no_env_file(monkeypatch)
         monkeypatch.setattr(
             agent_mod, "_AMBIENT_ENV_KEYS", frozenset({"ANTHROPIC_API_KEY"})
@@ -329,7 +333,7 @@ class TestIsAmbientKey:
         assert _is_ambient_key("anthropic") is True
 
     def test_false_when_env_name_absent(self, monkeypatch):
-        # browseruse key isn't in the snapshot — autofill wrote it to .env.
+        # browseruse key isn't in the snapshot: autofill wrote it to .env.
         self._no_env_file(monkeypatch)
         monkeypatch.setattr(
             agent_mod, "_AMBIENT_ENV_KEYS", frozenset({"ANTHROPIC_API_KEY"})
@@ -346,7 +350,7 @@ class TestIsAmbientKey:
         assert _is_ambient_key("browseruse") is False
 
     def test_false_when_shared_key_also_in_env_file(self, monkeypatch):
-        # Written into autofill's own .env, it's explicit config — not ambient,
+        # Written into autofill's own .env, it's explicit config: not ambient,
         # even though the shell exports the same name.
         monkeypatch.setattr(
             agent_mod, "_AMBIENT_ENV_KEYS", frozenset({"ANTHROPIC_API_KEY"})
@@ -612,22 +616,27 @@ class TestApplyProfileEdits:
         assert "- **Email:** jane@x.com" in out
 
 
+def _make_cookie(**kw):
+    """A cookielib Cookie with sane defaults, shared by the cookie test classes."""
+    from http.cookiejar import Cookie
+
+    defaults = dict(
+        version=0, name="sid", value="abc", port=None, port_specified=False,
+        domain=".workday.com", domain_specified=True, domain_initial_dot=True,
+        path="/", path_specified=True, secure=True, expires=1893456000,
+        discard=False, comment=None, comment_url=None, rest={},
+    )
+    defaults.update(kw)
+    # ty can't check **dict unpack against Cookie's typed signature; the
+    # runtime values above are correct.
+    return Cookie(**defaults)  # ty: ignore[invalid-argument-type]
+
+
 class TestCookiejarToStorageState:
     """`_cookiejar_to_storage_state` maps a cookielib jar to Playwright shape."""
 
     def _cookie(self, **kw):
-        from http.cookiejar import Cookie
-
-        defaults = dict(
-            version=0, name="sid", value="abc", port=None, port_specified=False,
-            domain=".workday.com", domain_specified=True, domain_initial_dot=True,
-            path="/", path_specified=True, secure=True, expires=1893456000,
-            discard=False, comment=None, comment_url=None, rest={},
-        )
-        defaults.update(kw)
-        # ty can't check **dict unpack against Cookie's typed signature; the
-        # runtime values above are correct.
-        return Cookie(**defaults)  # ty: ignore[invalid-argument-type]
+        return _make_cookie(**kw)
 
     def test_basic_fields_map_through(self):
         state = _cookiejar_to_storage_state([self._cookie()])
@@ -653,6 +662,72 @@ class TestCookiejarToStorageState:
 
     def test_empty_jar_yields_empty_cookies(self):
         assert _cookiejar_to_storage_state([]) == {"cookies": [], "origins": []}
+
+
+class TestChromeCookieSubprocess:
+    """browser_cookie3 is LGPL, so it runs in a child interpreter and is never
+    imported here. These pin that boundary and keep the child's output shape from
+    drifting away from `_cookiejar_to_storage_state`."""
+
+    def _run_script(self, tmp_path, module_src):
+        """Run the real export script with a stub browser_cookie3 on the path."""
+        import subprocess as sp
+
+        (tmp_path / "browser_cookie3.py").write_text(module_src)
+        env = {**os.environ, "PYTHONPATH": str(tmp_path)}
+        return sp.run(
+            [sys.executable, "-c", _COOKIE_EXPORT_SCRIPT],
+            capture_output=True, env=env, timeout=60,
+        )
+
+    def test_child_output_matches_the_in_process_converter(self, tmp_path):
+        """The child builds the same dict the tested converter would."""
+        stub = (
+            "from http.cookiejar import Cookie\n"
+            "def chrome():\n"
+            "    return [Cookie(\n"
+            "        version=0, name='sid', value='abc', port=None,\n"
+            "        port_specified=False, domain='.workday.com',\n"
+            "        domain_specified=True, domain_initial_dot=True, path='/',\n"
+            "        path_specified=True, secure=True, expires=1893456000,\n"
+            "        discard=False, comment=None, comment_url=None,\n"
+            "        rest={'HttpOnly': None},\n"
+            "    )]\n"
+        )
+        proc = self._run_script(tmp_path, stub)
+        assert proc.returncode == 0, proc.stderr.decode()
+
+        expected = _cookiejar_to_storage_state(
+            [_make_cookie(rest={"HttpOnly": None})]
+        )
+        assert json.loads(proc.stdout) == expected
+
+    def test_missing_module_exits_nonzero(self, tmp_path):
+        """No browser_cookie3 installed is a normal outcome, not a crash."""
+        proc = subprocess.run(
+            [sys.executable, "-c", _COOKIE_EXPORT_SCRIPT],
+            capture_output=True,
+            env={**os.environ, "PYTHONPATH": str(tmp_path)},
+            timeout=60,
+        )
+        assert proc.returncode != 0
+
+    def test_import_returns_none_when_child_fails(self, monkeypatch):
+        """A failing child yields None so callers fall back to manual sign-in."""
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda *a, **k: SimpleNamespace(returncode=3, stdout=b"", stderr=b""),
+        )
+        assert _import_chrome_cookies() is None
+
+    def test_import_returns_none_on_garbage_stdout(self, monkeypatch):
+        monkeypatch.setattr(
+            subprocess, "run",
+            lambda *a, **k: SimpleNamespace(
+                returncode=0, stdout=b"not json", stderr=b""
+            ),
+        )
+        assert _import_chrome_cookies() is None
 
 
 class _FakeHistory:
@@ -700,7 +775,7 @@ class TestLlmFailureReason:
         assert _llm_failure_reason(h) == "boom"
 
     def test_empty_string_when_no_output_and_no_error_text(self):
-        # Still a failure — distinguishable from None, so the caller reports it.
+        # Still a failure: distinguishable from None, so the caller reports it.
         assert _llm_failure_reason(_FakeHistory([], [])) == ""
 
     def test_initial_navigation_alone_is_not_model_output(self):
@@ -780,3 +855,25 @@ class TestFilterBlanksToForm:
     def test_matches_on_key_when_label_is_missing(self):
         snap = {"referred_by": {"label": "", "value": ""}}
         assert _filter_blanks_to_form(["Referred by"], snap) == ["Referred by"]
+
+
+class TestNonInteractiveExit:
+    """Without a TTY, questionary raises EOFError from inside prompt_toolkit.
+    That must surface as a one-line message, not a stack trace."""
+
+    def test_eoferror_becomes_a_clean_exit(self, monkeypatch, capsys):
+        monkeypatch.setattr(
+            agent_mod, "_run_cli", lambda: (_ for _ in ()).throw(EOFError())
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            agent_mod.cli()
+        assert excinfo.value.code == 1
+        assert "interactive terminal" in capsys.readouterr().out
+
+    def test_keyboardinterrupt_still_exits_130(self, monkeypatch):
+        monkeypatch.setattr(
+            agent_mod, "_run_cli", lambda: (_ for _ in ()).throw(KeyboardInterrupt())
+        )
+        with pytest.raises(SystemExit) as excinfo:
+            agent_mod.cli()
+        assert excinfo.value.code == 130

@@ -1,14 +1,14 @@
 """Observability: opt-out PostHog usage events + opt-in Sentry crash reports.
 
-Usage telemetry (PostHog) is opt-out — disable with ``AUTOFILL_TELEMETRY=0``.
+Usage telemetry (PostHog) is opt-out, disable with ``AUTOFILL_TELEMETRY=0``.
 Events sent (no PII):
-  install            — first-time setup completed
-  run / complete     — form fill started / finished
-  timeout            — agent hit the time limit
-  corrections_saved  — user corrections recorded
+  install:            first-time setup completed
+  run / complete:     form fill started / finished
+  timeout:            agent hit the time limit
+  corrections_saved:  user corrections recorded
 All events include: tool version, Python version, OS platform.
 
-Crash reporting (Sentry) is opt-in — enable with ``AUTOFILL_SENTRY=1``.
+Crash reporting (Sentry) is opt-in, enable with ``AUTOFILL_SENTRY=1``.
 Off by default because stack frames can incidentally capture personal profile
 data. When enabled, defaults are conservative: no PII, no local variables in
 frames, no performance tracing.
@@ -23,11 +23,11 @@ import uuid
 from pathlib import Path
 
 # ── PostHog setup ────────────────────────────────────────────────────────────
-# Public PostHog Project API key — write-only, safe to commit.
+# Public PostHog Project API key: write-only, safe to commit.
 # Users opt out via AUTOFILL_TELEMETRY=0.
 _POSTHOG_KEY = "phc_nrQoCoVSPLxMjGfXNXSjsBuXRdpGFnV9CuD6BYRahruy"
 _POSTHOG_HOST = "https://us.i.posthog.com"
-# Hard cap on events per CLI invocation — guards against runaway loops
+# Hard cap on events per CLI invocation: guards against runaway loops
 # inflating event volume from a single install.
 _MAX_EVENTS_PER_PROCESS = 25
 _event_count = 0
@@ -112,7 +112,7 @@ def track(event: str, properties: dict | None = None) -> None:
 
 
 # ── Sentry setup (opt-in) ────────────────────────────────────────────────────
-# Public DSN — write-only, safe to commit. Users opt in via AUTOFILL_SENTRY=1.
+# Public DSN: write-only, safe to commit. Users opt in via AUTOFILL_SENTRY=1.
 _SENTRY_DSN = "https://30e81fbd4680630b19d8561d7aeaa818@o4511413765865472.ingest.us.sentry.io/4511413767831552"
 
 
