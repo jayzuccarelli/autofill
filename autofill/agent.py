@@ -8,6 +8,7 @@ import json
 import logging
 import os
 import re
+import subprocess
 import sys
 import time
 from dataclasses import dataclass
@@ -35,14 +36,14 @@ from rich.theme import Theme
 from autofill.telemetry import init_sentry as _init_sentry
 from autofill.telemetry import track as _capture
 
-# browser_use and chromadb cost ~2.3s to import between them — most of the wait
+# browser_use and chromadb cost ~2.3s to import between them: most of the wait
 # before the first prompt. Neither is needed to onboard, print help, or pick a
 # provider, so they're imported at the point of use instead of on every startup.
 if TYPE_CHECKING:
     import browser_use as bu
     import chromadb
 
-# Env-var NAMES present at import — the user's shell environment, captured
+# Env-var NAMES present at import: the user's shell environment, captured
 # before cli() calls load_dotenv(). Lets onboarding tell an ambient key (e.g.
 # ANTHROPIC_API_KEY exported for Claude) apart from one autofill itself wrote to
 # .env, so it never silently adopts a key the user set for another tool.
@@ -51,7 +52,7 @@ _AMBIENT_ENV_KEYS = frozenset(os.environ)
 
 @dataclass(frozen=True)
 class Config:
-    """Central configuration — paths, chunking params, model IDs, and timeouts."""
+    """Central configuration, paths, chunking params, model IDs, and timeouts."""
 
     # Paths
     knowledge_dir: Path = Path("knowledge")
@@ -63,13 +64,13 @@ class Config:
     # `autofill uninstall` + reinstall (which deletes ~/autofill). Sits next to
     # the browser profile below, which already persists there for the same reason.
     env_file: Path = Path.home() / ".autofill" / ".env"
-    # Persistent browser profile — lives in $HOME (not cwd) so logins survive
+    # Persistent browser profile: lives in $HOME (not cwd) so logins survive
     # across runs. "chrome" must NOT appear in the path or browser-use copies it
     # to a throwaway temp dir (see BrowserProfile._copy_profile) and persistence
     # silently breaks.
     browser_profile_dir: Path = Path.home() / ".autofill" / "browser-profile"
     # One-time cookie seed imported from the user's Chrome at setup. Loaded into
-    # the browser on the next run (via storage_state), then deleted — afterwards
+    # the browser on the next run (via storage_state), then deleted: afterwards
     # the persistent profile above is the single source of truth.
     seed_state_file: Path = Path.home() / ".autofill" / "seed-cookies.json"
 
@@ -79,7 +80,7 @@ class Config:
     upsert_batch: int = 50
     max_text_chars: int = 100_000
 
-    # Retrieval — natural-language query so Chroma's embedding model
+    # Retrieval: natural-language query so Chroma's embedding model
     # surfaces a wide cross-section of the profile, not just contact basics.
     retrieval_query: str = (
         "personal contact information, home address, education, work history, "
@@ -88,7 +89,7 @@ class Config:
     )
     retrieval_n: int = 5
 
-    # Models — bump when upgrading provider SDKs. Override any of these at
+    # Models: bump when upgrading provider SDKs. Override any of these at
     # runtime without editing code via AUTOFILL_ANTHROPIC_MODEL /
     # AUTOFILL_OPENAI_MODEL / AUTOFILL_OLLAMA_MODEL.
     # Sonnet 5 reliably emits browser-use's structured tool calls; Haiku 4.5
@@ -98,7 +99,7 @@ class Config:
     # step recovers instead of hard-crashing "no fallback_llm configured".
     anthropic_fallback_model: str = "claude-opus-4-8"    # Anthropic Opus 4.8
     openai_model: str = "gpt-5.6-terra"                  # OpenAI GPT-5.6 Terra
-    # Ollama default — 14B is the smallest size that fills real forms reliably.
+    # Ollama default: 14B is the smallest size that fills real forms reliably.
     # Override via AUTOFILL_OLLAMA_MODEL env var or the onboarding prompt.
     ollama_model: str = "qwen2.5:14b"
 
@@ -112,7 +113,7 @@ class Config:
 
 cfg = Config()
 
-# Attachable document types (not .md/.txt — those are indexed as text, not bytes).
+# Attachable document types (not .md/.txt: those are indexed as text, not bytes).
 _ATTACHABLE_SUFFIXES = frozenset({".pdf", ".doc", ".docx"})
 # Legacy .doc (1997-2003 OLE binary) has no viable pure-Python parser; we skip
 # it during ingestion but still allow it as an upload attachment.
@@ -120,7 +121,7 @@ _UNPARSEABLE_SUFFIXES = frozenset({".doc"})
 
 # Provider registry. "env" is the API key env var, or None for providers that
 # don't take one (e.g. Ollama, which talks to a local server). "label" and
-# "url" are always strings — using Any to keep call sites typed as `str`.
+# "url" are always strings: using Any to keep call sites typed as `str`.
 # "shared" marks an env var other tools also read, so finding one in the shell
 # says nothing about what autofill should use. BROWSER_USE_API_KEY is ours alone.
 _PROVIDERS: dict[str, dict[str, Any]] = {
@@ -169,7 +170,7 @@ def _setup_logging() -> Path | None:
     """Attach a per-run file handler to the root logger; return its path.
 
     Captures whatever browser-use (``Agent``, ``prompts``, ``BrowserSession``,
-    ``tools``) writes via the stdlib ``logging`` module — same lines the user
+    ``tools``) writes via the stdlib ``logging`` module, same lines the user
     sees on the terminal. Opt out with ``AUTOFILL_LOG=0``. Returns ``None``
     when disabled or if the log directory can't be created.
     """
@@ -215,7 +216,7 @@ def _setup_logging() -> Path | None:
 
 
 def _field_count_bucket(n: int) -> str:
-    """Bucket field counts for telemetry — never sends a raw integer."""
+    """Bucket field counts for telemetry, never sends a raw integer."""
     if n <= 5:
         return "0-5"
     if n <= 15:
@@ -332,12 +333,12 @@ def _detect_provider() -> str | None:
 
     Cloud providers are *inferred* from which key is present, in _PROVIDERS
     order: Browser Use, Anthropic, OpenAI. An ambient key (a shared var like
-    ANTHROPIC_API_KEY exported in the shell for another tool) is skipped — the
+    ANTHROPIC_API_KEY exported in the shell for another tool) is skipped, the
     user must pick it explicitly. Ollama takes no key, so it is never inferred;
     only an explicit ``AUTOFILL_PROVIDER=ollama`` selects it.
 
     ``AUTOFILL_PROVIDER`` overrides all of it, but setup writes it only when
-    inference can't reach the user's choice — a stale one silently hijacks every
+    inference can't reach the user's choice, a stale one silently hijacks every
     later run.
     """
     saved = os.environ.get("AUTOFILL_PROVIDER", "").strip().lower()
@@ -371,7 +372,7 @@ def _provider_ready(provider: str) -> bool:
     """True if `provider` could run right now: its key is present, or it needs none.
 
     Deliberately ignores the ambient check. That guard exists because a shell key
-    alone doesn't say which provider the user wants — but naming the provider
+    alone doesn't say which provider the user wants, but naming the provider
     outright (``--provider anthropic``) is exactly the explicit choice it asks
     for, so the key should be honoured rather than the flag ignored.
     """
@@ -397,7 +398,7 @@ def _key_fingerprint(provider: str) -> str:
 
 
 def _env_file_keys() -> frozenset[str]:
-    """Names with a non-empty value in autofill's own .env — explicit config.
+    """Names with a non-empty value in autofill's own .env, explicit config.
 
     Blank lines like ``ANTHROPIC_API_KEY=`` are how people disable a key while
     keeping it around, so they must not count as configuring it: dotenv_values
@@ -414,7 +415,7 @@ def _is_ambient_key(provider: str) -> bool:
 
     Only *shared* vars can be ambient: ANTHROPIC_API_KEY is read by Claude and
     plenty else, so exporting one says nothing about autofill. BROWSER_USE_API_KEY
-    is autofill's alone — wherever it came from, it was set for us. A key in
+    is autofill's alone: wherever it came from, it was set for us. A key in
     autofill's own .env is explicit config, never ambient.
     """
     info = _PROVIDERS.get(provider, {})
@@ -522,7 +523,7 @@ def ingest() -> None:
         if path.suffix.lower() in _UNPARSEABLE_SUFFIXES:
             console.print(
                 f"[yellow]Warning:[/] [bold]{path.name}[/] is a legacy .doc file"
-                " — its content won't be indexed. Resave as .docx or PDF to make"
+                ": its content won't be indexed. Resave as .docx or PDF to make"
                 " it searchable."
             )
     current_files = {
@@ -558,7 +559,7 @@ def ingest() -> None:
             if not chunks:
                 console.print(
                     f"[yellow]Warning:[/] [bold]{fname}[/] produced no text "
-                    "chunks — skipping."
+                    "chunks; skipping."
                 )
                 progress.advance(task_id)
                 continue
@@ -589,7 +590,7 @@ def _attachment_paths() -> list[str]:
     """Paths browser-use may pass to ``<input type="file">``.
 
     Includes every PDF/DOC/DOCX in ``knowledge/`` (same visibility rules as
-    ``ingest``). There is **no** basename pattern or "resume" substring — only
+    ``ingest``). There is **no** basename pattern or "resume" substring, only
     the suffix allowlist. Which path belongs to which upload field is decided
     by the agent from **form labels**, not from matching strings in filenames.
     """
@@ -636,12 +637,12 @@ def _llm(provider: str) -> Any:
 # same way.
 
 # JS helpers embedded in _COLLECT_JS:
-#   SEL      — form controls + ARIA widgets + contenteditable we track
-#   labelFor — human label: aria-label → aria-labelledby → <label for> →
+#   SEL     : form controls + ARIA widgets + contenteditable we track
+#   labelFor: human label: aria-label → aria-labelledby → <label for> →
 #              wrapping <label> → placeholder
-#   keyFor   — stable identity: autocomplete token → name → id → label. Survives
+#   keyFor  : stable identity: autocomplete token → name → id → label. Survives
 #              re-renders that reorder fields (unlike a positional label suffix).
-#   valueOf  — current value: .checked for checkboxes, the selected option for
+#   valueOf : current value: .checked for checkboxes, the selected option for
 #              native radio groups (which collapse to one key) and custom
 #              dropdowns, textContent for contenteditable, else .value
 _FIELD_JS_HELPERS = r"""
@@ -650,7 +651,7 @@ const SEL = 'input,textarea,select,[role="textbox"],[role="combobox"],' +
   '[role="checkbox"],[role="switch"],[contenteditable="true"]';
 const labelFor = (el) => {
   // Resolve referenced labels within the field's own root (shadow root or
-  // iframe document), not the top document — otherwise linked labels inside a
+  // iframe document), not the top document, otherwise linked labels inside a
   // shadow/iframe come back empty and skip label-based sensitive filtering.
   const root = el.getRootNode();
   const al = el.getAttribute('aria-label'); if (al) return al.trim();
@@ -686,7 +687,7 @@ const valueOf = (el) => {
   if (el.matches && el.matches('input[type="radio"]')) {
     // A native radio group shares one name, so keyFor collapses it to a single
     // key. Report which option is selected (its value/label), not this element's
-    // checked bit — a bare true/false can't tell the agent which option to pick.
+    // checked bit, a bare true/false can't tell the agent which option to pick.
     let sel = el.checked ? el : null;
     if (el.name) {
       const scope = el.form || el.getRootNode();
@@ -720,7 +721,7 @@ const valueOf = (el) => {
 # Walk the whole DOM (light + open shadow roots + same-origin iframes) and return
 # JSON [{key,label,value}]. Bypasses browser-use's viewport-filtered selector_map,
 # which only surfaced fields the agent could act on (Greenhouse reported 1 of N).
-# Cross-origin iframes are skipped — job-application forms are same-origin.
+# Cross-origin iframes are skipped: job-application forms are same-origin.
 _COLLECT_JS = "(() => {" + _FIELD_JS_HELPERS + r"""
 const out = [], seen = new Set();
 const walk = (root) => {
@@ -754,7 +755,7 @@ async def _snapshot_fields(session) -> dict | None:
     lines up after the form re-renders. Sensitive fields are dropped.
 
     Returns ``None`` (not ``{}``) if the read fails, so callers can tell a failed
-    snapshot from a genuinely empty page — diffing against a failed baseline would
+    snapshot from a genuinely empty page, diffing against a failed baseline would
     log every populated field as a bogus correction.
     """
     try:
@@ -776,7 +777,7 @@ async def _snapshot_fields(session) -> dict | None:
                 or _SENSITIVE_FIELD_RE.search(label)):
             continue
         # Same-key collisions (e.g. two unlabelled fields sharing a name) collapse
-        # to the last occurrence — semantic keys make this rare, and it keeps the
+        # to the last occurrence: semantic keys make this rare, and it keeps the
         # baseline consistent with the live listener, which can't know positions.
         out[key] = {"label": label or key, "value": f.get("value", "")}
     return out
@@ -786,7 +787,7 @@ def _diff_corrections(agent_snapshot: dict, user_snapshot: dict) -> dict:
     """Diff the agent's baseline against the user's final field values.
 
     Both snapshots are ``{key: {"label", "value"}}``. Keeps genuine changes and
-    deletions (user cleared an agent-filled value — a "don't fill this" signal),
+    deletions (user cleared an agent-filled value, a "don't fill this" signal),
     and drops no-ops where both sides are empty. Returns
     ``{key: {"label", "agent", "user"}}``.
     """
@@ -808,8 +809,8 @@ async def _watch_fields(session, agent_snapshot: dict, url: str) -> dict:
 
     *agent_snapshot* is the baseline the caller took right after the agent finished.
     We block on a single Enter prompt while the user reviews and edits in the
-    browser, then re-read the whole DOM and diff. Reading the final DOM — rather
-    than tracking edit events — is what catches custom dropdowns (Airtable,
+    browser, then re-read the whole DOM and diff. Reading the final DOM, rather
+    than tracking edit events, is what catches custom dropdowns (Airtable,
     react-select) that fire no ``change``/``focusout``. The re-read and save run in
     a ``finally`` so Ctrl-C or a normal Enter both flush; a dead browser snapshots
     to ``None`` and simply yields no corrections. Returns the corrections dict.
@@ -861,12 +862,12 @@ def _load_corrections(url: str) -> str:
             lines.append(f"- {label}: use '{user_val}' (not '{agent_val}')")
         else:
             lines.append(
-                f"- {label}: leave BLANK — the user cleared this; do NOT fill it"
+                f"- {label}: leave BLANK; the user cleared this, do NOT fill it"
             )
     return "\n".join(lines)
 
 
-# Lookarounds (not \b) so '_' acts as a separator — `\w` includes underscore,
+# Lookarounds (not \b) so '_' acts as a separator: `\w` includes underscore,
 # which would otherwise let `password_field` and `auth_token` slip through.
 _SENSITIVE_FIELD_RE = re.compile(
     r"(?<![A-Za-z0-9])"
@@ -956,23 +957,62 @@ def _cookiejar_to_storage_state(jar) -> dict:
     return {"cookies": cookies, "origins": []}
 
 
+# Runs in a child interpreter so browser_cookie3 is never imported into this
+# process. It is LGPL-3.0 and autofill is MIT: importing it would make the two a
+# combined work under LGPL section 4 and pull relinking obligations onto this
+# project, while invoking it as a separate program does not. Emits the same
+# storage_state shape _cookiejar_to_storage_state builds.
+_COOKIE_EXPORT_SCRIPT = """
+import json, sys
+try:
+    import browser_cookie3
+except ImportError:
+    sys.exit(3)
+try:
+    jar = browser_cookie3.chrome()
+except Exception:
+    sys.exit(4)
+out = []
+for c in jar:
+    out.append({
+        "name": c.name,
+        "value": c.value,
+        "domain": c.domain,
+        "path": c.path,
+        "expires": float(c.expires) if c.expires else -1,
+        "httpOnly": bool(c.has_nonstandard_attr("HttpOnly")),
+        "secure": bool(c.secure),
+        "sameSite": "Lax",
+    })
+json.dump({"cookies": out, "origins": []}, sys.stdout)
+"""
+
+
 def _import_chrome_cookies() -> dict | None:
     """Read + decrypt the user's Chrome cookies into a storage_state dict.
 
-    Best-effort: returns None if ``browser_cookie3`` is missing, Chrome can't
-    be found, or the cookie store is locked/undecryptable. Callers fall back to
-    the manual sign-in flow in that case.
+    Best-effort: returns None if ``browser_cookie3`` isn't installed, Chrome
+    can't be found, or the cookie store is locked/undecryptable. Callers fall
+    back to the manual sign-in flow in that case.
+
+    browser_cookie3 runs in a subprocess rather than being imported; see
+    _COOKIE_EXPORT_SCRIPT for why.
     """
     try:
-        import browser_cookie3
-    except ImportError:
+        proc = subprocess.run(
+            [sys.executable, "-c", _COOKIE_EXPORT_SCRIPT],
+            capture_output=True,
+            timeout=30,
+        )
+    except (OSError, subprocess.TimeoutExpired):
+        return None
+    if proc.returncode != 0:
         return None
     try:
-        jar = browser_cookie3.chrome()
-    except Exception:
+        state = json.loads(proc.stdout)
+    except (ValueError, TypeError):
         return None
-    state = _cookiejar_to_storage_state(jar)
-    return state if state["cookies"] else None
+    return state if state.get("cookies") else None
 
 
 def _llm_failure_reason(history: Any) -> str | None:
@@ -1051,7 +1091,7 @@ async def main(url: str, provider: str, log_path: Path | None = None) -> None:
     if not profile.strip():
         raise SystemExit(
             "No profile in the knowledge store. Add one or more files under"
-            " knowledge/ (e.g. knowledge/profile.md — see README), run from the"
+            " knowledge/ (e.g. knowledge/profile.md, see README), run from the"
             " project root, then try again."
         )
     if log_path is not None:
@@ -1078,7 +1118,7 @@ async def main(url: str, provider: str, log_path: Path | None = None) -> None:
 
     task = f"""
 Open {url} and fill every applicable field using the profile below (map labels
-loosely — e.g. "Phone" = telephone):
+loosely, e.g. "Phone" = telephone):
 
 {profile}
 {corrections_section}
@@ -1095,7 +1135,7 @@ Rules:
   everything before submitting.
 {upload_rule}
 - Multi-step forms: clicking "Next", "Continue", "Save and continue", or
-  similar between-step buttons IS allowed — that's how you reach the next
+  similar between-step buttons IS allowed, that's how you reach the next
   page of fields.
 - What is FORBIDDEN is the FINAL action that submits the application:
   buttons like "Submit", "Submit application", "Apply", "Send application",
@@ -1162,7 +1202,7 @@ Rules:
             max_actions_per_step=3,
             register_new_step_callback=_on_step,
         )
-        # A malformed step from a weak model — or a 429/5xx — otherwise
+        # A malformed step from a weak model, or a 429/5xx, otherwise
         # hard-crashes the run ("no fallback_llm configured"). Give the Anthropic
         # path a stronger model to switch to once, so a bad step recovers.
         if provider == "anthropic":
@@ -1185,7 +1225,7 @@ Rules:
     timed_out = False
     # Pause-and-resume for login walls: the agent stops at a sign-in/sign-up
     # page (emitting LOGIN_REQUIRED), the user authenticates manually in the
-    # open window, then we re-run on the same URL — now logged in. Cap at two
+    # open window, then we re-run on the same URL: now logged in. Cap at two
     # resumes so a misfiring detector can't loop forever.
     for attempt in range(3):
         try:
@@ -1200,7 +1240,7 @@ Rules:
             })
             console.print(
                 f"\n[err]Agent timed out after {cfg.agent_timeout}s.[/] "
-                "The browser is still open — you can continue manually.",
+                "The browser is still open, you can continue manually.",
             )
             break
 
@@ -1210,7 +1250,7 @@ Rules:
             note = result[len("LOGIN_REQUIRED"):].lstrip(" :-").strip()
             console.print(
                 f"\n[accent]Sign-in needed[/]"
-                f"{' — ' + note if note else '.'}\n"
+                f"{', ' + note if note else '.'}\n"
                 "  Log in (or sign up) in the open browser window. Your session"
                 " is saved here, so you'll only do this once per site.\n"
             )
@@ -1252,7 +1292,7 @@ Rules:
         # Snapshot what the agent filled (full-DOM baseline), then re-snapshot
         # after the user edits to diff out their corrections.
         console.print(
-            "\n[info]Capturing form state — review and edit in the browser.[/]"
+            "\n[info]Capturing form state, review and edit in the browser.[/]"
         )
         agent_snapshot: dict | None = None
         if agent.browser_session is not None:
@@ -1262,7 +1302,7 @@ Rules:
                 console.print(f"[err]Warning:[/] Could not snapshot fields: {exc}")
             if agent_snapshot is None:
                 console.print(
-                    "[err]Warning:[/] Couldn't read the form — skipping correction "
+                    "[err]Warning:[/] Couldn't read the form, skipping correction "
                     "tracking this run."
                 )
             else:
@@ -1302,7 +1342,7 @@ Rules:
             )
 
         corrections: dict = {}
-        # Skip tracking when the baseline read failed — diffing against a failed
+        # Skip tracking when the baseline read failed: diffing against a failed
         # snapshot would log every populated field as a bogus correction.
         if agent.browser_session is not None and agent_snapshot is not None:
             try:
@@ -1318,7 +1358,7 @@ Rules:
             )
 
         console.print(
-            "[info]Tracking complete — browser stays open for you to submit.[/]"
+            "[info]Tracking complete, browser stays open for you to submit.[/]"
         )
     finally:
         # Always tear down event buses and watchdogs (keeps the browser window open).
@@ -1329,7 +1369,7 @@ Rules:
                 pass
         # One-time seed: it's baked into the persistent profile now, and
         # browser-use's storage watchdog keeps re-saving the live cookie jar
-        # back to it — plus .json.bak/.json.tmp rotations. Drop all three,
+        # back to it: plus .json.bak/.json.tmp rotations. Drop all three,
         # unconditionally, so artifacts from a crashed earlier run get swept too.
         for _seed_artifact in (
             cfg.seed_state_file,
@@ -1383,7 +1423,7 @@ def _parse_profile() -> dict[str, str]:
     return out
 
 
-# Canonical field order — used to append newly-set fields in edit mode.
+# Canonical field order: used to append newly-set fields in edit mode.
 _PROFILE_FIELDS = (
     "Full name", "Preferred Name", "Date of birth", "Email", "Phone",
     "Location", "LinkedIn", "X", "GitHub", "About",
@@ -1412,7 +1452,7 @@ def _apply_profile_edits(original: str, values: dict[str, str]) -> str:
             # blank new value -> drop the line
         else:
             out.append(line)
-            if key is not None:  # an unknown field the user added — keep it
+            if key is not None:  # an unknown field the user added, keep it
                 last_field_idx = len(out) - 1
     extra = [
         f"- **{k}:** {values[k]}"
@@ -1474,7 +1514,7 @@ def _onboard_profile(edit: bool = False) -> None:
     console.print()
     console.print(Rule("Profile", style="accent"))
     console.print(
-        "Edit any field — Enter keeps the current value.\n" if edit
+        "Edit any field, Enter keeps the current value.\n" if edit
         else "I need some info to fill forms on your behalf.\n",
         style="info",
     )
@@ -1514,7 +1554,7 @@ def _onboard_profile(edit: bool = False) -> None:
 
     cfg.knowledge_dir.mkdir(parents=True, exist_ok=True)
     if edit and cfg.profile.is_file():
-        # Preserve hand-added sections/paragraphs — update only known fields.
+        # Preserve hand-added sections/paragraphs: update only known fields.
         cfg.profile.write_text(
             _apply_profile_edits(cfg.profile.read_text(), values)
         )
@@ -1550,7 +1590,7 @@ def _env_set(name: str, value: str | None) -> None:
 
     Replaces rather than appends. Appending leaves the old line behind, so a
     pointer that should be gone lives on in the file and reappears the moment its
-    key does — and a file without a trailing newline gets the next line glued to
+    key does, and a file without a trailing newline gets the next line glued to
     it.
     """
     if not cfg.env_file.exists():
@@ -1571,7 +1611,7 @@ def _env_set(name: str, value: str | None) -> None:
 
 
 def _persist_provider_choice(provider: str) -> None:
-    """Record `provider` — but only if the keys present don't already imply it.
+    """Record `provider`, but only if the keys present don't already imply it.
 
     The pointer outranks every key, so a redundant one is a loaded gun: confirm
     Browser Use while a keyless ``AUTOFILL_PROVIDER=openai`` sits in .env and
@@ -1598,7 +1638,7 @@ def _onboard_ollama() -> None:
         f"Model name (Enter for default '{cfg.ollama_model}')",
         default=cfg.ollama_model,
     )
-    # Ollama takes no API key, so nothing about the environment can imply it —
+    # Ollama takes no API key, so nothing about the environment can imply it :
     # the pointer is the only record of the choice and is always written. It also
     # has to outrank any cloud key that shows up later: picking Ollama means
     # keeping the data local, and a BROWSER_USE_API_KEY appearing next week is no
@@ -1627,7 +1667,7 @@ def _onboard_api_key() -> None:
     console.print(Rule("Provider", style="accent"))
 
     # A shell-exported AUTOFILL_PROVIDER outranks every key, and .env can't undo
-    # it — load_dotenv() keeps the shell's value — so nothing chosen below would
+    # it: load_dotenv() keeps the shell's value: so nothing chosen below would
     # stick. Say so rather than silently ignoring the answer.
     if "AUTOFILL_PROVIDER" in _AMBIENT_ENV_KEYS:
         stale = os.environ.get("AUTOFILL_PROVIDER", "")
@@ -1641,7 +1681,7 @@ def _onboard_api_key() -> None:
     detected = _detect_provider()
     # Confirm a detected provider rather than adopting it silently. Ambient keys
     # (shared vars exported for another tool, e.g. ANTHROPIC_API_KEY for Claude)
-    # don't get even that — they're skipped, so a user who wants Browser Use
+    # don't get even that: they're skipped, so a user who wants Browser Use
     # never silently gets Anthropic.
     if detected and not _is_ambient_key(detected):
         detected_label = _PROVIDERS[detected]["label"].split(" (")[0]
@@ -1664,7 +1704,7 @@ def _onboard_api_key() -> None:
             f"Use {detected_label}{fp_suffix}?", default=True, style=_Q_STYLE
         ).unsafe_ask()
         if keep:
-            # Normally a no-op — inference already reaches `detected`, so this
+            # Normally a no-op: inference already reaches `detected`, so this
             # writes nothing. It's here to clear a stale pointer that inference
             # is currently outvoting but which would hijack the run the moment
             # its key appeared.
@@ -1724,7 +1764,7 @@ def _onboard_api_key() -> None:
             f"[success]✓[/] Using your {info['env']} from the environment.\n"
         )
     else:
-        # No key for the pick — so it won't be used. Name what will be, rather
+        # No key for the pick: so it won't be used. Name what will be, rather
         # than let a provider they just declined quietly take the run.
         fallback = _infer_provider()
         note = (
@@ -1734,7 +1774,7 @@ def _onboard_api_key() -> None:
             else ""
         )
         console.print(
-            f"[info]Skipped — set {info['env']} to use"
+            f"[info]Skipped, set {info['env']} to use"
             f" {_PROVIDERS[provider]['label'].split(' (')[0]}.{note}[/]\n"
         )
 
@@ -1767,7 +1807,7 @@ def _onboard_browser_cookies() -> None:
     ).unsafe_ask()
     if not do_import:
         console.print(
-            "[info]Skipped — you'll sign in manually the first time autofill"
+            "[info]Skipped, you'll sign in manually the first time autofill"
             " hits a login (it remembers after that).[/]\n"
         )
         return
@@ -1775,7 +1815,7 @@ def _onboard_browser_cookies() -> None:
     state = _import_chrome_cookies()
     if not state:
         console.print(
-            "[yellow]Couldn't read Chrome cookies[/] — Chrome may not be"
+            "[yellow]Couldn't read Chrome cookies[/], Chrome may not be"
             " installed, or the cookie store is locked/encrypted on this"
             " system. No problem: sign in manually the first time autofill"
             " hits a login and it'll remember after that.\n"
@@ -1787,8 +1827,40 @@ def _onboard_browser_cookies() -> None:
     cfg.seed_state_file.chmod(0o600)
     _capture("chrome_cookies_imported", {"cookie_count": len(state["cookies"])})
     console.print(
-        f"[success]✓[/] Imported {len(state['cookies'])} cookies — they'll load"
+        f"[success]✓[/] Imported {len(state['cookies'])} cookies, they'll load"
         " on your next run.\n"
+    )
+
+
+def _onboard_telemetry() -> None:
+    """Ask once whether to send anonymous usage stats; record the answer in .env.
+
+    Default is no. autofill reads resumes and identity documents, so nothing
+    leaves the machine unless the user says yes here. The answer is written to
+    .env so it survives an uninstall/reinstall, and an AUTOFILL_TELEMETRY set in
+    the shell still wins for scripted installs. Crash reports (Sentry) are
+    deliberately *not* offered here: their stack frames can incidentally capture
+    profile data, which is not something to solicit a click-through yes for.
+    """
+    console.print(Rule("Usage stats", style="accent"))
+    console.print(
+        "Anonymous usage stats help prioritize what to build: tool version, OS,"
+        " which provider you picked, and whether a run finished. Never your"
+        " profile, the forms you fill, or their URLs.",
+        style="info",
+    )
+    current = os.environ.get("AUTOFILL_TELEMETRY", "").strip() == "1"
+    opt_in = questionary.confirm(
+        "Send anonymous usage stats?", default=current, style=_Q_STYLE
+    ).unsafe_ask()
+    value = "1" if opt_in else "0"
+    _env_set("AUTOFILL_TELEMETRY", value)
+    os.environ["AUTOFILL_TELEMETRY"] = value
+    console.print(
+        "[info]Thanks. Turn them off any time with AUTOFILL_TELEMETRY=0.[/]\n"
+        if opt_in
+        else "[info]Skipped, nothing will be sent. Turn them on any time with"
+        " AUTOFILL_TELEMETRY=1.[/]\n"
     )
 
 
@@ -1799,9 +1871,9 @@ def _onboard(edit: bool = False) -> None:
     console.print(_banner(
         f"[bold]autofill[/]  [dim]v{_VERSION}[/]",
         "",
-        "Reconfiguring — Enter keeps current values."
+        "Reconfiguring, Enter keeps current values."
         if edit
-        else "Looks like you're new here — starting setup.",
+        else "Looks like you're new here, starting setup.",
     ))
     console.print()
 
@@ -1810,11 +1882,12 @@ def _onboard(edit: bool = False) -> None:
     if not _has_any_api_key():
         raise SystemExit(
             "No provider configured. Set BROWSER_USE_API_KEY,"
-            " ANTHROPIC_API_KEY, or OPENAI_API_KEY — or pick Ollama (local)"
+            " ANTHROPIC_API_KEY, or OPENAI_API_KEY, or pick Ollama (local)"
             " by running autofill again."
         )
     _onboard_files()
     _onboard_browser_cookies()
+    _onboard_telemetry()
     ingest()
     profile = retrieve(cfg.retrieval_query)
     if not profile.strip():
@@ -1871,13 +1944,22 @@ def _uninstall() -> None:
 
 
 def cli() -> None:
-    """Entry point — abort cleanly on Ctrl-C anywhere (onboarding prompts
+    """Entry point, abort cleanly on Ctrl-C anywhere (onboarding prompts
     included) with exit code 130 instead of dumping a KeyboardInterrupt traceback."""
     try:
         _run_cli()
     except KeyboardInterrupt:
         console.print("\n[info]Cancelled.[/]")
         raise SystemExit(130)
+    except EOFError:
+        # No TTY: piped, cron, CI, or an IDE terminal that isn't a real one.
+        # questionary's prompt_toolkit backend raises EOFError from deep inside
+        # its event loop, so without this the user gets a stack trace.
+        console.print(
+            "\n[err]autofill needs an interactive terminal.[/] "
+            "Run it directly in a shell rather than through a pipe or a CI job."
+        )
+        raise SystemExit(1)
 
 
 def _run_cli() -> None:
@@ -1910,7 +1992,7 @@ def _run_cli() -> None:
         return
 
     if args.command == "setup":
-        # Explicit reconfigure — re-run onboarding pre-filled with current values
+        # Explicit reconfigure: re-run onboarding pre-filled with current values
         # so a mistyped field (e.g. date of birth) or the provider can be fixed.
         _onboard(edit=True)
         return

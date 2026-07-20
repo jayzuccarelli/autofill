@@ -11,9 +11,6 @@ Meet **Phil**: eight hands on the keyboard so you don't have to use any.
 
 <br clear="left">
 
-
-Built on [browser-use](https://github.com/browser-use/browser-use).
-
 ---
 
 ## LLM Quickstart
@@ -32,7 +29,7 @@ Open a terminal and run:
 curl -fsSL https://raw.githubusercontent.com/jayzuccarelli/autofill/main/install.sh | bash
 ```
 
-Requires Python 3.11+ and a supported OS (macOS or Linux). Windows is untested.
+Requires `git` and a supported OS (macOS or Linux). Windows is untested. You don't need Python: the installer fetches uv, which brings its own.
 
 ### Setup
 
@@ -116,11 +113,13 @@ These now work. autofill runs in a **persistent browser profile** (`~/.autofill/
 
 Your profile and documents stay on your machine; autofill reads them locally and stores corrections locally. Relevant excerpts are sent to the LLM provider you configured (Browser Use, OpenAI, or Anthropic) so it can fill in form fields; that content is subject to your provider's data-handling policy. Choose the Ollama provider to keep everything on your machine, so no profile excerpts leave your network. Passwords, SSNs, and similar sensitive fields are stripped before any corrections are saved.
 
-autofill collects **anonymous** usage events (tool version, OS, LLM provider, whether a run completed) to help prioritize development. No personal data, no form content, no URLs. To opt out, set `AUTOFILL_TELEMETRY=0` in your shell:
+Usage stats are **off unless you turn them on**. Setup asks once, the default answer is no, and nothing is sent before you answer. If you say yes, autofill sends **anonymous** events (tool version, OS, LLM provider, whether a run completed) to help prioritize development. No personal data, no form content, no URLs.
+
+Change your mind either way by re-running `autofill` and going through setup again, or by setting the variable directly:
 
 ```bash
 # zsh
-echo 'export AUTOFILL_TELEMETRY=0' >> ~/.zshrc
+echo 'export AUTOFILL_TELEMETRY=0' >> ~/.zshrc   # 1 to enable
 # bash (Linux)
 echo 'export AUTOFILL_TELEMETRY=0' >> ~/.bashrc
 # bash (macOS)
