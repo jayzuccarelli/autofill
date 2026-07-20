@@ -7,6 +7,10 @@ export PATH="${HOME}/.local/bin:${HOME}/.cargo/bin:${PATH}"
 
 REPO_URL="${REPO_URL:-https://github.com/jayzuccarelli/autofill.git}"
 INSTALL_DIR="${INSTALL_DIR:-${HOME}/autofill}"
+# Which ref to install. Empty means "newest vN.N.N tag", so a fresh install gets
+# a released version rather than whatever happens to be on the default branch.
+# Set AUTOFILL_REF=main to track unreleased work.
+AUTOFILL_REF="${AUTOFILL_REF:-}"
 
 install_uv() {
   if command -v uv >/dev/null 2>&1; then
@@ -79,8 +83,19 @@ else
     echo "Install git, or clone the repo manually and run ./install.sh inside it." >&2
     exit 1
   fi
-  echo "Cloning into ${INSTALL_DIR}…"
-  git clone "$REPO_URL" "$INSTALL_DIR"
+  ref="$AUTOFILL_REF"
+  if [[ -z "$ref" ]]; then
+    ref="$(git ls-remote --tags --refs --sort=-v:refname "$REPO_URL" 'v*' \
+      2>/dev/null | head -1 | sed 's|.*refs/tags/||')"
+  fi
+  if [[ -n "$ref" ]]; then
+    echo "Cloning ${ref} into ${INSTALL_DIR}…"
+    git clone --branch "$ref" "$REPO_URL" "$INSTALL_DIR"
+  else
+    # No tags published yet, so fall back to the default branch.
+    echo "Cloning into ${INSTALL_DIR}…"
+    git clone "$REPO_URL" "$INSTALL_DIR"
+  fi
   cd "$INSTALL_DIR"
   uv sync --quiet
 fi
