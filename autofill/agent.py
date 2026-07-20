@@ -1012,6 +1012,39 @@ def _left_blank_fields(result: str) -> list[str]:
     return []
 
 
+def _norm_field_name(name: str) -> str:
+    """Lowercase alphanumerics only, parentheticals dropped, for loose matching."""
+    return re.sub(r"[^a-z0-9]+", "", re.sub(r"\([^)]*\)", " ", name.lower()))
+
+
+def _filter_blanks_to_form(blanks: list[str], snapshot: dict | None) -> list[str]:
+    """Keep only reported blanks that match an empty field actually in the DOM.
+
+    Models pad LEFT_BLANK with profile details the form never asked for and
+    with fields they in fact filled ("Graduation Year (selected default
+    2026)"). The snapshot is ground truth: a name survives only if some
+    empty-valued field's label or key matches it. Short names (under 3 chars,
+    e.g. "X") match exactly; longer ones match by substring either way. A
+    failed snapshot (None) keeps the model's list, unverified beats unseen.
+    """
+    if snapshot is None:
+        return blanks
+    empties: list[str] = []
+    for key, field in snapshot.items():
+        if not str(field.get("value") or "").strip():
+            empties.append(_norm_field_name(str(field.get("label") or "")))
+            empties.append(_norm_field_name(str(key)))
+    empties = [e for e in empties if e]
+
+    def on_form(name: str) -> bool:
+        n = _norm_field_name(name)
+        if len(n) < 3:
+            return n in empties
+        return any(n in e or e in n for e in empties)
+
+    return [b for b in blanks if on_form(b)]
+
+
 async def main(url: str, provider: str, log_path: Path | None = None) -> None:
     """Build the task prompt and run the browser agent (ingest already ran in cli)."""
     profile = retrieve(cfg.retrieval_query)
@@ -1075,9 +1108,12 @@ Rules:
   The user will sign in manually and you'll resume on the form afterwards.
 - When everything the profile supports is filled, finish with the done action
   and tell the user to review and submit manually. In the done message,
-  include one line starting with the exact token LEFT_BLANK: listing the
-  fields you left empty for lack of profile data, separated by semicolons
+  include one line starting with the exact token LEFT_BLANK: listing only
+  fields that are visible on the form and that you left empty because the
+  profile lacks the answer, separated by semicolons
   (e.g. "LEFT_BLANK: Referred by; Desired salary"), or "LEFT_BLANK: none".
+  Never list profile details the form never asked for, fields that only
+  appear after choosing another option, or fields you filled or selected.
 """
 
     llm = _llm(provider)
@@ -1208,22 +1244,10 @@ Rules:
             _capture("agent_no_model_output", {"provider": provider})
             return
 
-        # Surface the fields the agent skipped for lack of data, so gaps are
-        # seen before submitting rather than discovered after. The corrections
-        # tracker below then learns whatever the user types into them.
         blanks = (
             [] if timed_out
             else _left_blank_fields(agent.history.final_result() or "")
         )
-        if blanks:
-            console.print(
-                "\n[accent]Left blank (no data in your profile):[/] "
-                + ", ".join(blanks)
-            )
-            console.print(
-                "  [dim]Fill these in the open browser; your answers are"
-                " remembered for next time.[/]"
-            )
 
         # Snapshot what the agent filled (full-DOM baseline), then re-snapshot
         # after the user edits to diff out their corrections.
@@ -1243,6 +1267,23 @@ Rules:
                 )
             else:
                 console.print(f"[dim]Tracking {len(agent_snapshot)} field(s)…[/]")
+
+        # Surface the fields the agent skipped for lack of data, so gaps are
+        # seen before submitting rather than discovered after. Checked against
+        # the snapshot first: only names matching an empty field really on the
+        # form survive, since models pad the list with profile details the
+        # form never asked for. The corrections tracker below then learns
+        # whatever the user types into them.
+        blanks = _filter_blanks_to_form(blanks, agent_snapshot)
+        if blanks:
+            console.print(
+                "\n[accent]Left blank (no data in your profile):[/] "
+                + ", ".join(blanks)
+            )
+            console.print(
+                "  [dim]Fill these in the open browser; your answers are"
+                " remembered for next time.[/]"
+            )
 
         field_count = len(agent_snapshot or {})
         if not timed_out:
