@@ -4,8 +4,8 @@ build-backend = "hatchling.build"
 
 [project]
 name = "autofill"
-version = "0.2.0"
-description = "AI-powered form autofill assistant"
+version = "0.2.1"
+description = "Form-filling agent built on browser-use"
 readme = "README.md"
 license = { file = "LICENSE" }
 requires-python = ">=3.11"
