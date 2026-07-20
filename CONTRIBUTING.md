@@ -4,7 +4,7 @@ Thanks for your interest! autofill is a small project with a single implementati
 
 ## Filing an issue
 
-Please use the [bug report template](.github/ISSUE_TEMPLATE/bug_report.md), we need OS, Python version, LLM provider, and (if possible) the form URL to reproduce. For feature ideas, open a regular issue describing the use case before writing code, so we can discuss scope.
+Please use the [bug report template](.github/ISSUE_TEMPLATE/bug_report.md); we need OS, Python version, LLM provider, and (if possible) the form URL to reproduce. For feature ideas, open a regular issue describing the use case before writing code, so we can discuss scope.
 
 ## Dev setup
 
@@ -24,11 +24,11 @@ uv run ruff check .
 uv run pytest tests/
 ```
 
-Both must pass, CI runs the same on Python 3.11 and 3.12. New behavior should come with at least a smoke test in [`tests/test_smoke.py`](tests/test_smoke.py).
+Both must pass; CI runs the same on Python 3.11 and 3.12. New behavior should come with at least a smoke test in [`tests/test_smoke.py`](tests/test_smoke.py).
 
 ## Conventions
 
-- Read [AGENTS.md](AGENTS.md) first, architecture, ingest/retrieve flow, and key files are documented there.
+- Read [AGENTS.md](AGENTS.md) first; architecture, ingest/retrieve flow, and key files are documented there.
 - Match the existing style in `agent.py`; avoid unrelated refactors in a behavioral change.
 - The agent must **never** click Submit/Apply/Send. That guarantee is load-bearing.
 - User data stays gitignored: `knowledge/*` (except `.gitkeep` and `profile.example.md`), `.env`, and `.autofill_install_id`.

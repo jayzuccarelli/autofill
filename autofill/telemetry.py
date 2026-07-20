@@ -1,6 +1,9 @@
-"""Observability: opt-out PostHog usage events + opt-in Sentry crash reports.
+"""Observability: opt-in PostHog usage events + opt-in Sentry crash reports.
 
-Usage telemetry (PostHog) is opt-out, disable with ``AUTOFILL_TELEMETRY=0``.
+Usage telemetry (PostHog) is opt-in, enable with ``AUTOFILL_TELEMETRY=1``.
+Setup asks once and records the answer in .env; anything other than ``1``
+(including unset) means no events are sent. Nothing is collected before the
+user has answered, so declining leaves no trace at all.
 Events sent (no PII):
   install:            first-time setup completed
   run / complete:     form fill started / finished
@@ -24,7 +27,7 @@ from pathlib import Path
 
 # ── PostHog setup ────────────────────────────────────────────────────────────
 # Public PostHog Project API key: write-only, safe to commit.
-# Users opt out via AUTOFILL_TELEMETRY=0.
+# Users opt in via AUTOFILL_TELEMETRY=1, asked once during setup.
 _POSTHOG_KEY = "phc_nrQoCoVSPLxMjGfXNXSjsBuXRdpGFnV9CuD6BYRahruy"
 _POSTHOG_HOST = "https://us.i.posthog.com"
 # Hard cap on events per CLI invocation: guards against runaway loops
@@ -39,7 +42,7 @@ _client_lock = threading.Lock()
 
 def _enabled() -> bool:
     return (
-        os.environ.get("AUTOFILL_TELEMETRY", "1").strip() != "0"
+        os.environ.get("AUTOFILL_TELEMETRY", "0").strip() == "1"
         and not _POSTHOG_KEY.startswith("REPLACE_")
     )
 

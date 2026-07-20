@@ -415,7 +415,7 @@ def _is_ambient_key(provider: str) -> bool:
 
     Only *shared* vars can be ambient: ANTHROPIC_API_KEY is read by Claude and
     plenty else, so exporting one says nothing about autofill. BROWSER_USE_API_KEY
-    is autofill's alone, wherever it came from, it was set for us. A key in
+    is autofill's alone: wherever it came from, it was set for us. A key in
     autofill's own .env is explicit config, never ambient.
     """
     info = _PROVIDERS.get(provider, {})
@@ -523,7 +523,7 @@ def ingest() -> None:
         if path.suffix.lower() in _UNPARSEABLE_SUFFIXES:
             console.print(
                 f"[yellow]Warning:[/] [bold]{path.name}[/] is a legacy .doc file"
-                ", its content won't be indexed. Resave as .docx or PDF to make"
+                ": its content won't be indexed. Resave as .docx or PDF to make"
                 " it searchable."
             )
     current_files = {
@@ -559,7 +559,7 @@ def ingest() -> None:
             if not chunks:
                 console.print(
                     f"[yellow]Warning:[/] [bold]{fname}[/] produced no text "
-                    "chunks, skipping."
+                    "chunks; skipping."
                 )
                 progress.advance(task_id)
                 continue
@@ -862,7 +862,7 @@ def _load_corrections(url: str) -> str:
             lines.append(f"- {label}: use '{user_val}' (not '{agent_val}')")
         else:
             lines.append(
-                f"- {label}: leave BLANK, the user cleared this; do NOT fill it"
+                f"- {label}: leave BLANK; the user cleared this, do NOT fill it"
             )
     return "\n".join(lines)
 
@@ -1202,7 +1202,7 @@ Rules:
             max_actions_per_step=3,
             register_new_step_callback=_on_step,
         )
-        # A malformed step from a weak model: or a 429/5xx: otherwise
+        # A malformed step from a weak model, or a 429/5xx, otherwise
         # hard-crashes the run ("no fallback_llm configured"). Give the Anthropic
         # path a stronger model to switch to once, so a bad step recovers.
         if provider == "anthropic":
@@ -1832,6 +1832,38 @@ def _onboard_browser_cookies() -> None:
     )
 
 
+def _onboard_telemetry() -> None:
+    """Ask once whether to send anonymous usage stats; record the answer in .env.
+
+    Default is no. autofill reads resumes and identity documents, so nothing
+    leaves the machine unless the user says yes here. The answer is written to
+    .env so it survives an uninstall/reinstall, and an AUTOFILL_TELEMETRY set in
+    the shell still wins for scripted installs. Crash reports (Sentry) are
+    deliberately *not* offered here: their stack frames can incidentally capture
+    profile data, which is not something to solicit a click-through yes for.
+    """
+    console.print(Rule("Usage stats", style="accent"))
+    console.print(
+        "Anonymous usage stats help prioritize what to build: tool version, OS,"
+        " which provider you picked, and whether a run finished. Never your"
+        " profile, the forms you fill, or their URLs.",
+        style="info",
+    )
+    current = os.environ.get("AUTOFILL_TELEMETRY", "").strip() == "1"
+    opt_in = questionary.confirm(
+        "Send anonymous usage stats?", default=current, style=_Q_STYLE
+    ).unsafe_ask()
+    value = "1" if opt_in else "0"
+    _env_set("AUTOFILL_TELEMETRY", value)
+    os.environ["AUTOFILL_TELEMETRY"] = value
+    console.print(
+        "[info]Thanks. Turn them off any time with AUTOFILL_TELEMETRY=0.[/]\n"
+        if opt_in
+        else "[info]Skipped, nothing will be sent. Turn them on any time with"
+        " AUTOFILL_TELEMETRY=1.[/]\n"
+    )
+
+
 def _onboard(edit: bool = False) -> None:
     """Run first-time setup, or (edit=True) reconfigure: profile, key, files, ingest."""
     _capture("onboarding_started", {"edit": edit})
@@ -1855,6 +1887,7 @@ def _onboard(edit: bool = False) -> None:
         )
     _onboard_files()
     _onboard_browser_cookies()
+    _onboard_telemetry()
     ingest()
     profile = retrieve(cfg.retrieval_query)
     if not profile.strip():

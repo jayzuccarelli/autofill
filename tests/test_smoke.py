@@ -10,6 +10,7 @@ import pytest
 
 from autofill import __version__
 from autofill import agent as agent_mod
+from autofill import telemetry as telemetry_mod
 from autofill.agent import (
     _COOKIE_EXPORT_SCRIPT,
     _PROFILE_FIELDS,
@@ -877,3 +878,90 @@ class TestNonInteractiveExit:
         with pytest.raises(SystemExit) as excinfo:
             agent_mod.cli()
         assert excinfo.value.code == 130
+
+
+class TestTelemetryOptIn:
+    """Usage stats must be off unless the user explicitly turned them on.
+
+    The default flipped from opt-out to opt-in before launch: an unset variable
+    now means "do not send", so a user who never answers the setup question is
+    never tracked.
+    """
+
+    def test_disabled_when_unset(self, monkeypatch):
+        monkeypatch.delenv("AUTOFILL_TELEMETRY", raising=False)
+        assert telemetry_mod._enabled() is False
+
+    def test_disabled_when_zero(self, monkeypatch):
+        monkeypatch.setenv("AUTOFILL_TELEMETRY", "0")
+        assert telemetry_mod._enabled() is False
+
+    def test_enabled_only_on_explicit_one(self, monkeypatch):
+        monkeypatch.setenv("AUTOFILL_TELEMETRY", "1")
+        assert telemetry_mod._enabled() is True
+
+    @pytest.mark.parametrize("value", ["true", "yes", "on", "2", " ", "01"])
+    def test_other_truthy_looking_values_do_not_enable(self, monkeypatch, value):
+        """Only "1" counts. A stray value must fail closed, not open."""
+        monkeypatch.setenv("AUTOFILL_TELEMETRY", value)
+        assert telemetry_mod._enabled() is False
+
+    def test_track_sends_nothing_when_disabled(self, monkeypatch):
+        monkeypatch.delenv("AUTOFILL_TELEMETRY", raising=False)
+        called = []
+        monkeypatch.setattr(
+            telemetry_mod, "_get_client", lambda: called.append(1) or None
+        )
+        telemetry_mod.track("run", {"provider": "anthropic"})
+        assert called == []
+
+
+class TestOnboardTelemetryQuestion:
+    """Setup asks once and persists the answer to .env."""
+
+    def _run(self, monkeypatch, answer, tmp_env):
+        # Through monkeypatch so the write _onboard_telemetry does to os.environ
+        # is undone at teardown; otherwise the answer leaks into later tests.
+        monkeypatch.delenv("AUTOFILL_TELEMETRY", raising=False)
+        monkeypatch.setattr(
+            agent_mod.questionary,
+            "confirm",
+            lambda *a, **k: SimpleNamespace(unsafe_ask=lambda: answer),
+        )
+        agent_mod._onboard_telemetry()
+        return tmp_env.read_text()
+
+    def test_yes_writes_one(self, monkeypatch, tmp_env):
+        assert "AUTOFILL_TELEMETRY=1" in self._run(monkeypatch, True, tmp_env)
+        assert os.environ["AUTOFILL_TELEMETRY"] == "1"
+
+    def test_no_writes_zero(self, monkeypatch, tmp_env):
+        assert "AUTOFILL_TELEMETRY=0" in self._run(monkeypatch, False, tmp_env)
+        assert os.environ["AUTOFILL_TELEMETRY"] == "0"
+
+    def test_declining_leaves_telemetry_disabled(self, monkeypatch, tmp_env):
+        self._run(monkeypatch, False, tmp_env)
+        assert telemetry_mod._enabled() is False
+
+    def test_default_is_no_on_a_fresh_install(self, monkeypatch, tmp_env):
+        """The prompt's default decides what pressing Enter does; it must be no."""
+        monkeypatch.delenv("AUTOFILL_TELEMETRY", raising=False)
+        seen = {}
+        monkeypatch.setattr(
+            agent_mod.questionary,
+            "confirm",
+            lambda *a, **k: seen.update(k) or SimpleNamespace(unsafe_ask=lambda: False),
+        )
+        agent_mod._onboard_telemetry()
+        assert seen["default"] is False
+
+    def test_default_reflects_an_existing_opt_in(self, monkeypatch, tmp_env):
+        monkeypatch.setenv("AUTOFILL_TELEMETRY", "1")
+        seen = {}
+        monkeypatch.setattr(
+            agent_mod.questionary,
+            "confirm",
+            lambda *a, **k: seen.update(k) or SimpleNamespace(unsafe_ask=lambda: True),
+        )
+        agent_mod._onboard_telemetry()
+        assert seen["default"] is True
