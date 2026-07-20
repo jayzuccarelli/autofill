@@ -17,6 +17,7 @@ from autofill.agent import (
     _cookiejar_to_storage_state,
     _detect_provider,
     _diff_corrections,
+    _filter_blanks_to_form,
     _is_ambient_key,
     _key_fingerprint,
     _left_blank_fields,
@@ -739,3 +740,43 @@ class TestLeftBlankFields:
 
     def test_empty_value_means_nothing_skipped(self):
         assert _left_blank_fields("LEFT_BLANK:") == []
+
+
+class TestFilterBlanksToForm:
+    """Reported blanks survive only when an empty field on the form matches."""
+
+    SNAP = {
+        "referral": {"label": "Referral", "value": ""},
+        "grad_year": {"label": "Graduation Year", "value": "2026"},
+        "email": {"label": "Email", "value": "jay@example.com"},
+        "video": {"label": "Video Link (optional)", "value": ""},
+    }
+
+    def test_phantom_profile_fields_are_dropped(self):
+        # The model padded LEFT_BLANK with profile details (name, DOB, phone)
+        # the form never asked for; only the real empty field survives.
+        blanks = ["Preferred Name", "Date of Birth", "Phone", "Referral"]
+        assert _filter_blanks_to_form(blanks, self.SNAP) == ["Referral"]
+
+    def test_filled_fields_are_dropped_even_if_reported(self):
+        # "Graduation Year (selected default 2026)" is not blank: value 2026.
+        got = _filter_blanks_to_form(
+            ["Graduation Year (selected default 2026)"], self.SNAP
+        )
+        assert got == []
+
+    def test_parentheticals_do_not_block_the_match(self):
+        assert _filter_blanks_to_form(["Video Link"], self.SNAP) == ["Video Link"]
+
+    def test_failed_snapshot_keeps_the_model_list(self):
+        # No ground truth to check against; unverified beats unseen.
+        assert _filter_blanks_to_form(["Anything"], None) == ["Anything"]
+
+    def test_short_names_match_exactly_not_by_substring(self):
+        snap = {"x": {"label": "X", "value": ""}}
+        assert _filter_blanks_to_form(["X"], snap) == ["X"]
+        assert _filter_blanks_to_form(["X"], self.SNAP) == []
+
+    def test_matches_on_key_when_label_is_missing(self):
+        snap = {"referred_by": {"label": "", "value": ""}}
+        assert _filter_blanks_to_form(["Referred by"], snap) == ["Referred by"]
