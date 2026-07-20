@@ -18,7 +18,7 @@ Built on [browser-use](https://github.com/browser-use/browser-use).
 
 ## LLM Quickstart
 
-For Cursor, Claude Code, Copilot, etc.: start with [`AGENTS.md`](AGENTS.md). Claude Code also loads [`CLAUDE.md`](CLAUDE.md).
+For Claude Code, Codex, Cursor, etc.: start with [`AGENTS.md`](AGENTS.md). Claude Code also loads [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
