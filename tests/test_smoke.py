@@ -19,6 +19,7 @@ from autofill.agent import (
     _diff_corrections,
     _is_ambient_key,
     _key_fingerprint,
+    _left_blank_fields,
     _llm,
     _llm_failure_reason,
     _load_corrections,
@@ -711,3 +712,30 @@ class TestLlmFailureReason:
     def test_real_step_after_the_initial_navigation_counts(self):
         h = _FakeHistory(["Initial navigation", "step"], [None], first_step=0)
         assert _llm_failure_reason(h) is None
+
+
+class TestLeftBlankFields:
+    """The LEFT_BLANK: line in the done message names the skipped fields."""
+
+    def test_semicolon_separated_fields(self):
+        msg = "Form filled.\nLEFT_BLANK: Referred by; Desired salary\nDone."
+        assert _left_blank_fields(msg) == ["Referred by", "Desired salary"]
+
+    def test_none_means_nothing_skipped(self):
+        assert _left_blank_fields("All set.\nLEFT_BLANK: none") == []
+
+    def test_none_with_trailing_period(self):
+        assert _left_blank_fields("LEFT_BLANK: None.") == []
+
+    def test_missing_token_means_nothing_reported(self):
+        assert _left_blank_fields("Filled everything, please review.") == []
+
+    def test_commas_split_too(self):
+        # The prompt asks for semicolons, but models drift to commas.
+        assert _left_blank_fields("LEFT_BLANK: A, B") == ["A", "B"]
+
+    def test_blank_segments_are_dropped(self):
+        assert _left_blank_fields("LEFT_BLANK: A; ; B;") == ["A", "B"]
+
+    def test_empty_value_means_nothing_skipped(self):
+        assert _left_blank_fields("LEFT_BLANK:") == []
