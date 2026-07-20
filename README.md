@@ -5,7 +5,7 @@
 
 <img src=".github/assets/phil.svg" alt="Phil, the autofill octopus" width="180" align="left">
 
-AI-powered form autofill: describe yourself once, then point it at any web form and it fills every field for you. You review and submit manually.
+Form-filling agent built on [browser-use](https://github.com/browser-use/browser-use): describe yourself once, point it at any web form, and it fills every field automatically. You review and submit manually.
 
 Meet **Phil**: eight hands on the keyboard so you don't have to use any.
 

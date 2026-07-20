@@ -90,11 +90,14 @@ else
   fi
   if [[ -n "$ref" ]]; then
     echo "Cloning ${ref} into ${INSTALL_DIR}…"
-    git clone --branch "$ref" "$REPO_URL" "$INSTALL_DIR"
+    # Quiet: cloning a tag otherwise prints a wall of detached-HEAD advice
+    # that reads like something went wrong.
+    git -c advice.detachedHead=false clone --quiet --branch "$ref" \
+      "$REPO_URL" "$INSTALL_DIR"
   else
     # No tags published yet, so fall back to the default branch.
     echo "Cloning into ${INSTALL_DIR}…"
-    git clone "$REPO_URL" "$INSTALL_DIR"
+    git clone --quiet "$REPO_URL" "$INSTALL_DIR"
   fi
   cd "$INSTALL_DIR"
   uv sync --quiet
