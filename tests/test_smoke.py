@@ -157,11 +157,11 @@ class TestCorrectionsRoundtrip:
     def test_new_shape_renders_label_and_value(self, tmp_corrections):
         _save_corrections(
             "https://example.com/form",
-            {"legal-name": {"label": "Legal Name", "agent": "Alex", "user": "Alexander"}},
+            {"legal-name": {"label": "Legal Name", "agent": "Jane", "user": "Janet"}},
         )
         loaded = _load_corrections("https://example.com/form")
         assert "Legal Name" in loaded  # display label, not the semantic key
-        assert "Eugenio" in loaded
+        assert "Janet" in loaded
         assert "legal-name" not in loaded
 
     def test_cleared_field_renders_leave_blank(self, tmp_corrections):
@@ -263,9 +263,9 @@ class TestDetectProvider:
         assert _detect_provider() is None
 
     def test_browseruse_beats_ambient_anthropic(self, monkeypatch):
-        # Example shell: both keys exported, no AUTOFILL_PROVIDER. BROWSER_USE_API_KEY
+        # A shell with both keys exported, no AUTOFILL_PROVIDER. BROWSER_USE_API_KEY
         # is autofill-exclusive so it's never ambient; ANTHROPIC_API_KEY is shared
-        # and gets skipped. Browser Use must win (internal ref).
+        # and gets skipped. Browser Use must win.
         self._clear_keys(monkeypatch)
         bu, ak = _PROVIDERS["browseruse"]["env"], _PROVIDERS["anthropic"]["env"]
         monkeypatch.setenv(bu, "bu-key")
@@ -274,7 +274,7 @@ class TestDetectProvider:
         assert _detect_provider() == "browseruse"
 
     def test_ambient_key_not_auto_adopted(self, monkeypatch):
-        # A key exported in the shell (ambient) must not be auto-selected (internal ref).
+        # A key exported in the shell (ambient) must not be auto-selected.
         self._clear_keys(monkeypatch)
         env = _PROVIDERS["anthropic"]["env"]
         monkeypatch.setenv(env, "ak")
@@ -362,7 +362,7 @@ class TestIsAmbientKey:
         # `ANTHROPIC_API_KEY=` is how you switch a key off while keeping the line.
         # dotenv_values still reports the name, so a naive membership test would
         # treat it as explicit config and hand the ambient guard back the very key
-        # the user just disabled (internal ref).
+        # the user just disabled.
         tmp_env.write_text("ANTHROPIC_API_KEY=\nOPENAI_API_KEY=oa-key\n")
         monkeypatch.setattr(
             agent_mod,
@@ -451,7 +451,7 @@ class TestPersistProviderChoice:
     """AUTOFILL_PROVIDER is written only when inference can't reach the choice.
 
     A stale pointer outranks every key and silently hijacks later runs, so the
-    common paths must not create one at all (internal ref).
+    common paths must not create one at all.
     """
 
     def _setup(self, monkeypatch, tmp_env):
@@ -528,10 +528,10 @@ class TestNormalizeDob:
     @pytest.mark.parametrize(
         "raw,expected",
         [
-            ("1990-05-23", "1990-05-23"),
-            ("05/23/1990", "1990-05-23"),
-            ("May 23, 1990", "1990-05-23"),
-            ("23 May 1990", "1990-05-23"),
+            ("2000-01-15", "2000-01-15"),
+            ("01/15/2000", "2000-01-15"),
+            ("January 15, 2000", "2000-01-15"),
+            ("15 January 2000", "2000-01-15"),
             ("", ""),
             ("   ", ""),
         ],
@@ -551,7 +551,7 @@ class TestParseProfile:
         p.write_text(
             "# Jane Doe\n"
             "- **Full name:** Jane Doe\n"
-            "- **Date of birth:** 1990-05-23\n"
+            "- **Date of birth:** 2000-01-15\n"
             "- **Email:** jane@example.com\n"
         )
         object.__setattr__(cfg, "profile", p)
@@ -560,7 +560,7 @@ class TestParseProfile:
         finally:
             object.__setattr__(cfg, "profile", type(cfg).profile)
         assert parsed["Full name"] == "Jane Doe"
-        assert parsed["Date of birth"] == "1990-05-23"
+        assert parsed["Date of birth"] == "2000-01-15"
         assert parsed["Email"] == "jane@example.com"
         assert "Jane Doe" not in parsed  # the `# heading` line isn't a field
 
@@ -686,7 +686,7 @@ class TestLlmFailureReason:
         assert _llm_failure_reason(h) is None
 
     def test_reports_the_403_that_stopped_the_run(self):
-        # Example case: browser-use free tier is blocked from the LLM gateway, so
+        # Real case: the browser-use free tier is blocked from the LLM gateway, so
         # every step 403s, no output is ever produced, and nothing gets filled.
         blocked = (
             "API request failed: Free tier accounts are not allowed to use the"
@@ -748,7 +748,7 @@ class TestFilterBlanksToForm:
     SNAP = {
         "referral": {"label": "Referral", "value": ""},
         "grad_year": {"label": "Graduation Year", "value": "2026"},
-        "email": {"label": "Email", "value": "jay@example.com"},
+        "email": {"label": "Email", "value": "user@example.com"},
         "video": {"label": "Video Link (optional)", "value": ""},
     }
 

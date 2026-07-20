@@ -97,7 +97,7 @@ class Config:
     # One-shot fallback: auto-engages on a provider/rate-limit error so a bad
     # step recovers instead of hard-crashing "no fallback_llm configured".
     anthropic_fallback_model: str = "claude-opus-4-8"    # Anthropic Opus 4.8
-    openai_model: str = "gpt-4o-mini"                    # OpenAI GPT-4o mini
+    openai_model: str = "gpt-5.6-terra"                  # OpenAI GPT-5.6 Terra
     # Ollama default — 14B is the smallest size that fills real forms reliably.
     # Override via AUTOFILL_OLLAMA_MODEL env var or the onboarding prompt.
     ollama_model: str = "qwen2.5:14b"
@@ -338,7 +338,7 @@ def _detect_provider() -> str | None:
 
     ``AUTOFILL_PROVIDER`` overrides all of it, but setup writes it only when
     inference can't reach the user's choice — a stale one silently hijacks every
-    later run (internal ref).
+    later run.
     """
     saved = os.environ.get("AUTOFILL_PROVIDER", "").strip().lower()
     if saved in _PROVIDERS:
@@ -1448,7 +1448,7 @@ def _ask_dob(default: str = "") -> str:
         if dob is not None:
             return dob
         console.print(
-            "[err]Couldn't parse that date.[/] Try 1990-05-23 or 05/23/1990."
+            "[err]Couldn't parse that date.[/] Try 2000-01-15 or 01/15/2000."
         )
         # Drop a bad pre-filled default so a non-interactive stdin (EOF keeps
         # returning `default`) resolves to a skip instead of spinning forever.
@@ -1628,7 +1628,7 @@ def _onboard_api_key() -> None:
 
     # A shell-exported AUTOFILL_PROVIDER outranks every key, and .env can't undo
     # it — load_dotenv() keeps the shell's value — so nothing chosen below would
-    # stick. Say so rather than silently ignoring the answer (internal ref).
+    # stick. Say so rather than silently ignoring the answer.
     if "AUTOFILL_PROVIDER" in _AMBIENT_ENV_KEYS:
         stale = os.environ.get("AUTOFILL_PROVIDER", "")
         console.print(
@@ -1642,7 +1642,7 @@ def _onboard_api_key() -> None:
     # Confirm a detected provider rather than adopting it silently. Ambient keys
     # (shared vars exported for another tool, e.g. ANTHROPIC_API_KEY for Claude)
     # don't get even that — they're skipped, so a user who wants Browser Use
-    # never silently gets Anthropic (internal ref).
+    # never silently gets Anthropic.
     if detected and not _is_ambient_key(detected):
         detected_label = _PROVIDERS[detected]["label"].split(" (")[0]
         fp = _key_fingerprint(detected)
