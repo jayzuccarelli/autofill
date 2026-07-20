@@ -995,6 +995,23 @@ def _llm_failure_reason(history: Any) -> str | None:
     return next((e for e in history.errors() if e), "")
 
 
+def _left_blank_fields(result: str) -> list[str]:
+    """Fields the agent reported leaving empty, from its LEFT_BLANK: line.
+
+    The task prompt asks the done message to carry one line
+    "LEFT_BLANK: a; b" (or "LEFT_BLANK: none"). Models sometimes separate
+    with commas instead of semicolons, so both split.
+    """
+    for line in result.splitlines():
+        line = line.strip()
+        if line.startswith("LEFT_BLANK:"):
+            value = line[len("LEFT_BLANK:"):].strip()
+            if value.rstrip(".").lower() in ("", "none"):
+                return []
+            return [f.strip() for f in re.split(r"[;,]", value) if f.strip()]
+    return []
+
+
 async def main(url: str, provider: str, log_path: Path | None = None) -> None:
     """Build the task prompt and run the browser agent (ingest already ran in cli)."""
     profile = retrieve(cfg.retrieval_query)
@@ -1033,10 +1050,16 @@ loosely — e.g. "Phone" = telephone):
 {profile}
 {corrections_section}
 Rules:
-- Prefer selects and radios that match the values above; otherwise choose the
-  closest reasonable option.
-- Try to answer all the questions; if unsure, make a reasonable guess.
-- For longer fields, write a few sentences consistent with the profile.
+- Factual fields (names, dates, employers, education, contact details, links,
+  referrals, salary, visa/authorization answers): fill only from the profile
+  or corrections above. If the answer is not there, leave the field empty and
+  move on. An empty field is correct; invented data is not.
+- Selects and radios: pick the option the profile supports, or the closest
+  reasonable one when several fit. If the profile gives no basis at all,
+  leave it unset.
+- Open-ended prose ("Why this company?", "Tell us about yourself"): drafting
+  a few sentences from profile material is allowed; the user reviews
+  everything before submitting.
 {upload_rule}
 - Multi-step forms: clicking "Next", "Continue", "Save and continue", or
   similar between-step buttons IS allowed — that's how you reach the next
@@ -1050,8 +1073,11 @@ Rules:
   and make your message start with the exact token LOGIN_REQUIRED followed by
   a short note on what's needed (e.g. "LOGIN_REQUIRED: Workday account sign-in").
   The user will sign in manually and you'll resume on the form afterwards.
-- When everything reasonable is filled, finish with the done action and tell
-  the user to review and submit manually.
+- When everything the profile supports is filled, finish with the done action
+  and tell the user to review and submit manually. In the done message,
+  include one line starting with the exact token LEFT_BLANK: listing the
+  fields you left empty for lack of profile data, separated by semicolons
+  (e.g. "LEFT_BLANK: Referred by; Desired salary"), or "LEFT_BLANK: none".
 """
 
     llm = _llm(provider)
@@ -1182,6 +1208,23 @@ Rules:
             _capture("agent_no_model_output", {"provider": provider})
             return
 
+        # Surface the fields the agent skipped for lack of data, so gaps are
+        # seen before submitting rather than discovered after. The corrections
+        # tracker below then learns whatever the user types into them.
+        blanks = (
+            [] if timed_out
+            else _left_blank_fields(agent.history.final_result() or "")
+        )
+        if blanks:
+            console.print(
+                "\n[accent]Left blank (no data in your profile):[/] "
+                + ", ".join(blanks)
+            )
+            console.print(
+                "  [dim]Fill these in the open browser; your answers are"
+                " remembered for next time.[/]"
+            )
+
         # Snapshot what the agent filled (full-DOM baseline), then re-snapshot
         # after the user edits to diff out their corrections.
         console.print(
@@ -1211,6 +1254,9 @@ Rules:
                     "last_step": last_step,
                     "elapsed_seconds": agent_run_elapsed,
                     "field_count_bucket": _field_count_bucket(field_count),
+                    # How often the no-invented-facts rule engages. A count,
+                    # never the field names (telemetry stays content-free).
+                    "left_blank_count": len(blanks),
                 },
             )
 
