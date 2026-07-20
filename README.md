@@ -58,15 +58,15 @@ The first time you run it, autofill walks you through:
 ### Fill a form
 
 ```bash
-autofill "https://example.com/register"
+autofill 'https://example.com/register'
 ```
 
 The agent opens a browser, fills the form, and leaves it open for you to review and submit.
 
-> **Always wrap the URL in quotes.** Bare URLs with `?` or `&` are interpreted by the shell; `&` backgrounds the command and your URL gets truncated. Quoting hands the full URL to autofill verbatim.
+> **Always wrap the URL in single or double quotes.** Bare URLs with `?` or `&` are interpreted by the shell; `&` backgrounds the command and your URL gets truncated. Quoting hands the full URL to autofill verbatim.
 
 ```bash
-autofill --provider anthropic "https://example.com/register?ref=xyz"  # override provider
+autofill --provider anthropic 'https://example.com/register?ref=xyz'  # override provider
 ```
 
 ### Uninstall
