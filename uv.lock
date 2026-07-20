@@ -204,7 +204,6 @@ name = "autofill"
 version = "0.2.2"
 source = { editable = "." }
 dependencies = [
-    { name = "browser-cookie3" },
     { name = "browser-use" },
     { name = "chromadb" },
     { name = "docx2txt" },
@@ -217,6 +216,9 @@ dependencies = [
 ]
 
 [package.optional-dependencies]
+chrome-cookies = [
+    { name = "browser-cookie3" },
+]
 dev = [
     { name = "pytest" },
     { name = "pytest-asyncio" },
@@ -226,7 +228,7 @@ dev = [
 
 [package.metadata]
 requires-dist = [
-    { name = "browser-cookie3", specifier = ">=0.20" },
+    { name = "browser-cookie3", marker = "extra == 'chrome-cookies'", specifier = ">=0.20" },
     { name = "browser-use", specifier = ">=0.12.6,<0.13" },
     { name = "chromadb", specifier = ">=0.6" },
     { name = "docx2txt", specifier = ">=0.8" },
@@ -241,7 +243,7 @@ requires-dist = [
     { name = "sentry-sdk", specifier = ">=2.0" },
     { name = "ty", marker = "extra == 'dev'", specifier = ">=0.0.37" },
 ]
-provides-extras = ["dev"]
+provides-extras = ["chrome-cookies", "dev"]
 
 [[package]]
 name = "backoff"

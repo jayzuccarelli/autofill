@@ -26,10 +26,13 @@ link_binary() {
   local link_dir="${HOME}/.local/bin"
   mkdir -p "$link_dir"
 
-  # Create a small wrapper that invokes autofill via uv run
+  # Create a small wrapper that invokes autofill via uv run.
+  # --extra chrome-cookies must match the sync below: without it uv prunes the
+  # extra back out of the environment on the next run and the Chrome login
+  # import silently stops working.
   cat > "$link_dir/autofill" <<WRAPPER
 #!/usr/bin/env bash
-cd "$project_dir" && exec uv run autofill "\$@"
+cd "$project_dir" && exec uv run --extra chrome-cookies autofill "\$@"
 WRAPPER
   chmod +x "$link_dir/autofill"
 
@@ -74,7 +77,9 @@ fi
 
 if [[ -f "${INSTALL_DIR}/pyproject.toml" ]]; then
   cd "$INSTALL_DIR"
-  uv sync --quiet
+  # chrome-cookies pulls browser-cookie3 (LGPL, run only as a subprocess);
+  # without the extra the Chrome login import is a silent no-op.
+  uv sync --extra chrome-cookies --quiet
 elif [[ -d "${INSTALL_DIR}" ]]; then
   echo "INSTALL_DIR exists but is not this project: ${INSTALL_DIR}" >&2
   exit 1
@@ -100,7 +105,9 @@ else
     git clone --quiet "$REPO_URL" "$INSTALL_DIR"
   fi
   cd "$INSTALL_DIR"
-  uv sync --quiet
+  # chrome-cookies pulls browser-cookie3 (LGPL, run only as a subprocess);
+  # without the extra the Chrome login import is a silent no-op.
+  uv sync --extra chrome-cookies --quiet
 fi
 
 link_binary "$INSTALL_DIR"

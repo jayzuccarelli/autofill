@@ -17,7 +17,7 @@ assignees: ""
 3.
 
 **Form URL (if applicable)**
-<!-- The form you were trying to fill. Public URLs only — please don't paste anything that requires a login or includes a session token. -->
+<!-- The form you were trying to fill. Public URLs only; please don't paste anything that requires a login or includes a session token. -->
 
 **Environment**
 - OS:           <!-- e.g. macOS 14.4, Ubuntu 24.04, Fedora 40 -->
