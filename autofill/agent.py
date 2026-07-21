@@ -91,7 +91,14 @@ class Config:
 
     # Models: bump when upgrading provider SDKs. Override any of these at
     # runtime without editing code via AUTOFILL_ANTHROPIC_MODEL /
-    # AUTOFILL_OPENAI_MODEL / AUTOFILL_OLLAMA_MODEL.
+    # AUTOFILL_OPENAI_MODEL / AUTOFILL_OLLAMA_MODEL / AUTOFILL_BROWSERUSE_MODEL.
+    # Browser Use: name the model, never take the SDK default. Their default is
+    # the alias "bu-latest", whose meaning changed under us: in 0.12.x it
+    # resolved to bu-1-0, in 0.13.x to bu-2-0. Pinned to <0.13, we kept sending
+    # the previous-generation bu-1-0 long after the gateway stopped serving it,
+    # and it answers with 500 rather than a 4xx naming the model, so the SDK
+    # burns five retries a step and the run dies with nothing filled.
+    browseruse_model: str = "bu-2-0"                     # Browser Use BU-2.0
     # Sonnet 5 reliably emits browser-use's structured tool calls; Haiku 4.5
     # drops the required `action` on real forms, so it can't be the default.
     anthropic_model: str = "claude-sonnet-5"             # Anthropic Sonnet 5
@@ -619,7 +626,8 @@ def _llm(provider: str) -> Any:
         return ChatOpenAI(model=model)
     if provider == "browseruse":
         from browser_use import ChatBrowserUse
-        return ChatBrowserUse()
+        model = os.environ.get("AUTOFILL_BROWSERUSE_MODEL") or cfg.browseruse_model
+        return ChatBrowserUse(model=model)
     if provider == "ollama":
         from browser_use.llm.ollama.chat import ChatOllama
         model = os.environ.get("AUTOFILL_OLLAMA_MODEL") or cfg.ollama_model
@@ -1035,6 +1043,31 @@ def _llm_failure_reason(history: Any) -> str | None:
     return next((e for e in history.errors() if e), "")
 
 
+def _provider_hint(provider: str, error: str) -> str | None:
+    """What the user can actually do about *error*, or None if we've no idea.
+
+    The provider's own message is often a dead end ("Server error. An error
+    occurred processing your request."), which leaves the user with a failed run
+    and nowhere to go. Only claim a cause the error text supports; a wrong hint
+    sends people to rotate a perfectly good key.
+    """
+    low = error.lower()
+    if provider != "browseruse":
+        return None
+    if "llm gateway" in low or "upgrade your subscription" in low:
+        return (
+            "Browser Use's hosted models need a paid plan; credits alone don't"
+            " unlock them. Switch provider instead:"
+            " [accent]autofill --provider anthropic '<url>'[/]"
+        )
+    if "server error" in low or "500" in low:
+        return (
+            "That's Browser Use's gateway failing, not your key or plan."
+            " Switch provider: [accent]autofill --provider anthropic '<url>'[/]"
+        )
+    return None
+
+
 def _left_blank_fields(result: str) -> list[str]:
     """Fields the agent reported leaving empty, from its LEFT_BLANK: line.
 
@@ -1278,6 +1311,8 @@ Rules:
             # A whitespace-only error splits to no lines, so guard before [-1].
             if lines := llm_failure.strip().splitlines():
                 console.print(f"  [dim]{lines[-1][:300]}[/]")
+            if hint := _provider_hint(provider, llm_failure):
+                console.print(f"  {hint}")
             if log_path is not None:
                 console.print(f"  Full log: [dim]{log_path}[/]")
             console.print()
