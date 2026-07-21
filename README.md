@@ -47,7 +47,7 @@ The first time you run it, autofill walks you through:
 
 | Provider | Key env var | Notes |
 |---|---|---|
-| Browser Use | `BROWSER_USE_API_KEY` | Default; managed, no extra setup |
+| Browser Use | `BROWSER_USE_API_KEY` | Default; managed, no extra setup. Uses `bu-2-0`; override with `AUTOFILL_BROWSERUSE_MODEL`. Their hosted models need a paid Browser Use plan; credits alone don't unlock them. |
 | Anthropic | `ANTHROPIC_API_KEY` | Uses `claude-sonnet-5` |
 | OpenAI | `OPENAI_API_KEY` | Uses `gpt-5.6-terra` |
 | Ollama | _(none, local)_ | Experimental. Needs Ollama running locally; defaults to `qwen2.5:14b`. Override with `AUTOFILL_OLLAMA_MODEL`; point at a remote host with `OLLAMA_HOST`. Smaller models (≤7B) tend to misfill fields; 14B+ recommended. |

@@ -526,6 +526,50 @@ class TestModelOverride:
         monkeypatch.delenv("AUTOFILL_ANTHROPIC_MODEL", raising=False)
         assert _llm("anthropic").model == cfg.anthropic_model
 
+    def test_browseruse_env_override(self, monkeypatch):
+        monkeypatch.setenv(_PROVIDERS["browseruse"]["env"], "bu-key")
+        monkeypatch.setenv("AUTOFILL_BROWSERUSE_MODEL", "bu-1-0")
+        assert _llm("browseruse").model == "bu-1-0"
+
+    def test_browseruse_names_the_model_never_the_sdk_default(self, monkeypatch):
+        """Regression: we shipped whatever the SDK's alias meant that month.
+
+        `ChatBrowserUse()` used to be called with no model, so the alias
+        "bu-latest" decided for us: bu-1-0 under 0.12.x, bu-2-0 under 0.13.x.
+        The gateway stopped serving bu-1-0 and answered 500, so every run died
+        with nothing filled. Assert a concrete id, not just "not empty".
+        """
+        monkeypatch.setenv(_PROVIDERS["browseruse"]["env"], "bu-key")
+        monkeypatch.delenv("AUTOFILL_BROWSERUSE_MODEL", raising=False)
+        assert cfg.browseruse_model == "bu-2-0"
+        assert _llm("browseruse").model == "bu-2-0"
+
+
+class TestProviderHint:
+    """`_provider_hint` turns a dead-end provider error into a next step."""
+
+    def test_gateway_500_points_at_another_provider(self):
+        hint = agent_mod._provider_hint(
+            "browseruse", "ModelProviderError: Server error. An error occurred"
+        )
+        assert hint is not None and "--provider anthropic" in hint
+
+    def test_free_tier_403_explains_credits_are_not_a_plan(self):
+        hint = agent_mod._provider_hint(
+            "browseruse",
+            "Free tier accounts are not allowed to use the LLM Gateway."
+            " Upgrade your subscription.",
+        )
+        assert hint is not None and "paid plan" in hint
+
+    @pytest.mark.parametrize("provider", ["anthropic", "openai", "ollama"])
+    def test_silent_for_other_providers(self, provider):
+        assert agent_mod._provider_hint(provider, "Server error") is None
+
+    def test_silent_when_the_error_supports_no_diagnosis(self):
+        """A wrong hint sends people to rotate a perfectly good key."""
+        assert agent_mod._provider_hint("browseruse", "some unrelated failure") is None
+
 
 class TestNormalizeDob:
     """`_normalize_dob` coerces common inputs to YYYY-MM-DD, '' , or None."""
