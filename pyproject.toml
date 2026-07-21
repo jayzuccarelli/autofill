@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "autofill"
-version = "0.2.3"
+version = "0.2.4"
 description = "Form-filling agent built on browser-use"
 readme = "README.md"
 license = { file = "LICENSE" }
@@ -22,7 +22,7 @@ classifiers = [
     "Programming Language :: Python :: 3.12",
 ]
 dependencies = [
-    "browser-use>=0.12.6,<0.13",
+    "browser-use>=0.13.6,<0.14",
     "chromadb>=0.6",
     "docx2txt>=0.8",
     "pdfplumber>=0.11",
