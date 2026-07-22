@@ -87,7 +87,11 @@ class Config:
         "skills, languages, work authorization and visa status, salary "
         "expectations, demographics, references, certifications, projects"
     )
-    retrieval_n: int = 5
+    # 10, not 5: at 5 a long resume loses whole sections. `evals/` scores a
+    # senior profile at 82% fact recall with 5 chunks, missing highest degree,
+    # skills, and publications, and at 100% with 10. Ten chunks of 1000 chars
+    # is about 2.5k tokens, which costs nothing next to the page DOM.
+    retrieval_n: int = 10
 
     # Models: bump when upgrading provider SDKs. Override any of these at
     # runtime without editing code via AUTOFILL_ANTHROPIC_MODEL /

@@ -43,7 +43,12 @@ uv sync --extra dev
 uv run ruff check .
 uv run ty check
 uv run pytest tests/
+uv run python -m evals.run   # retrieval fact-recall eval; see evals/README.md
 ```
+
+Run the eval after any change to chunking, retrieval, or the `Config` fields
+either one reads. It scores whether `retrieve()` actually surfaces the facts a
+form asks for, and says whether a miss came from ranking or from chunking.
 
 ## Conventions
 
